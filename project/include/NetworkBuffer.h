@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <string>
 #include <stdexcept>
+#include <utility>
 
 namespace Networking
 {
@@ -37,6 +38,12 @@ public:
 
     void Read(std::string& destination);
     void Write(const std::string& value);
+
+    template<typename E> requires std::is_enum_v<E>
+    void Write(const E& e);
+
+    template<typename E> requires std::is_enum_v<E>
+    void Read(E& e);
 
     std::byte* Data() const;
     std::size_t Size() const;
@@ -113,6 +120,11 @@ void Buffer::Clear()
     m_Position = 0;
 }
 
+void Buffer::Reset()
+{
+    m_Position = 0;
+}
+
 void Buffer::Read(std::integral auto& destination)
 {
     ReadImpl(destination);
@@ -156,6 +168,27 @@ void Buffer::Write(const std::string& value)
     
     std::memcpy(m_Data.get() + m_Position, value.data(), length);
     m_Position += length;
+}
+
+template<typename E> requires std::is_enum_v<E>
+void Buffer::Write(const E& e)
+{
+    using U = std::underlying_type_t<E>;
+    
+    U value = static_cast<U>(e);
+
+    WriteImpl(value);
+}
+
+template<typename E> requires std::is_enum_v<E>
+void Buffer::Read(E& e)
+{
+    using U = std::underlying_type_t<E>;
+    
+    U value{};
+    ReadImpl(value);
+
+    e = static_cast<E>(value);
 }
 
 std::byte* Buffer::Data() const

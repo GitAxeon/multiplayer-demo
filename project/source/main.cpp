@@ -337,7 +337,6 @@ int main(int argc, char* argv[])
                             if(ImGui::Button("Send"))
                             {
                                 server->Broadcast(buffer.data());
-                                buffer.fill('\0');
                             }
 
                             if(ImGui::Button("Stop server"))
