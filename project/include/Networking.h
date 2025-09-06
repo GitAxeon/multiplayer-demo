@@ -238,15 +238,15 @@ public:
 
         if(header.messageType == MessageType::CONNECTION_REQUEST)
         {
-            if(m_NewClients.find(header.clientId) != m_NewClients.end())
+            if(m_Clients.find(header.clientId) != m_Clients.end())
             {
                 std::println("Connection request from an already connected client?");
                 return;
             }
 
-            m_NewClients[m_MonotonicClientId] = UDPConnection();
-            m_NewClients[m_MonotonicClientId].endpoint = endpoint;
-            m_NewClients[m_MonotonicClientId].lastMessageTime = UDPConnection::Clock::now();
+            m_Clients[m_MonotonicClientId] = UDPConnection();
+            m_Clients[m_MonotonicClientId].endpoint = endpoint;
+            m_Clients[m_MonotonicClientId].lastMessageTime = UDPConnection::Clock::now();
             
             std::println(
                 "New client [id: {}] from [{}:{}]",
@@ -281,7 +281,7 @@ public:
         const auto now = std::chrono::system_clock::now();
         header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
 
-        for(auto& [id, client] : m_NewClients)
+        for(auto& [id, client] : m_Clients)
         {
             header.sequence = client.sequencer.ObtainNewSequence();
             auto buffer = std::make_shared<Networking::Buffer>(sizeof(UDPHeader) + sizeof(std::size_t) + message.length());
@@ -316,8 +316,9 @@ private:
     asio::io_context m_Context;
     asio::ip::udp::socket m_Socket;
     std::thread m_NetworkThread;
-    
-    std::unordered_map<ClientId, UDPConnection> m_NewClients;
+
+    std::unordered_map<ClientId, UDPConnection> m_PendingClients;
+    std::unordered_map<ClientId, UDPConnection> m_Clients;
     ClientId m_MonotonicClientId = 1;
 
     std::mutex m_IncomingMessageMutex;
