@@ -64,6 +64,8 @@ constexpr UDPFlag UDP_Unreliable = 1 << 0;
 constexpr UDPFlag UDP_Reliable = 1 << 1;
 constexpr UDPFlag UDP_OrderedReliable = 1 << 2;
 
+using ClientId = uint8_t;
+
 struct UDPHeader
 {
     uint32_t protocol{sProtocol};
@@ -80,7 +82,16 @@ struct UDPMessage
     // std::vector<std::byte> data;
 };
 
-using ClientId = uint8_t;
+struct PendingClient
+{
+    using Clock = std::chrono::steady_clock;
+
+    asio::ip::udp::endpoint endpoint;
+    uint32_t challenge{0};
+    Clock::time_point lastMessageTime;
+    
+    int retries = 5;
+};
 
 struct UDPConnection
 {
@@ -131,7 +142,7 @@ void Deserialize(UDPHeader& header, Buffer& buffer)
 class UDPServer
 {
 public:
-    UDPServer() : m_Context(), m_Socket(m_Context)
+    UDPServer() : m_Context(), m_Socket(m_Context), m_ChallengeTimer(m_Context)
     {
         std::println("UDPServer created");
     }
@@ -168,6 +179,7 @@ public:
 
             m_Buffer.Clear();
             ScheduleReceive();
+            ScheduleChallengeCheck();
 
             m_NetworkThread = std::thread([this]()
             { 
@@ -234,6 +246,35 @@ public:
         {
             std::println("Protocol mismatch in message header");
             return;
+        }
+
+        switch(header.messageType)
+        {
+        case MessageType::CONNECTION_REQUEST:
+        {
+            auto result = m_PendingClients.find(endpoint);
+
+            /* Todo: Random generate */
+            const uint32_t challenge = 123456;
+
+            if(result == m_PendingClients.end())
+            {
+                m_PendingClients[endpoint] = PendingClient
+                {
+                    .endpoint = endpoint,
+                    .challenge = challenge,
+                    .lastMessageTime = PendingClient::Clock::now()
+                };
+                
+                SendChallenge(endpoint);
+            }
+
+        } break;
+        case MessageType::CHALLENGE_RESPONSE:
+        break;
+        // default:
+
+        //     // Oop
         }
 
         if(header.messageType == MessageType::CONNECTION_REQUEST)
@@ -313,11 +354,91 @@ public:
     }
 
 private:
+    void SendChallenge(asio::ip::udp::endpoint endpoint)
+    {
+        auto searchResult = m_PendingClients.find(endpoint);
+        
+        if(searchResult == m_PendingClients.end())
+            return;
+
+        UDPHeader header;
+        header.messageType = MessageType::CHALLENGE;
+
+        const auto now = std::chrono::system_clock::now();
+        header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+
+        auto buffer = std::make_shared<Networking::Buffer>(sizeof(UDPHeader) + sizeof(uint32_t));
+
+        Serialize(header, *buffer);
+        buffer->Write(searchResult->second.challenge);
+        
+        Send(endpoint, buffer);
+    }
+
+    void Send(asio::ip::udp::endpoint endpoint, std::shared_ptr<Networking::Buffer> buffer)
+    {
+        m_Socket.async_send_to(asio::buffer(buffer->Data(), buffer->Size()), endpoint, [buffer, endpoint](std::error_code ec, std::size_t length)
+        {
+            if(ec)
+            {
+                std::println("Broadcast failed for {}:{}", endpoint.address().to_string(), endpoint.port());
+            }
+        });        
+    }
+
+    void ScheduleChallengeCheck()
+    {
+        using namespace std::chrono_literals;
+        m_ChallengeTimer.expires_after(100ms);
+
+        m_ChallengeTimer.async_wait([&](std::error_code ec)
+        {
+            if(!ec)
+            {
+                UpdatePendingClients();
+            }
+            else
+            {
+                std::println("Error: steady_timer.async_wait: {}", ec.message());
+            }
+
+            ScheduleChallengeCheck();
+        });
+    }
+
+    void UpdatePendingClients()
+    {
+        using namespace std::chrono_literals;
+        auto now = PendingClient::Clock::now();
+
+        for(auto it = m_PendingClients.begin(); it != m_PendingClients.end();)
+        {
+            auto& pendingClient = it->second;
+            if(now - pendingClient.lastMessageTime > 200ms)
+            {
+                if(pendingClient.retries <= 0)
+                {
+                    it = m_PendingClients.erase(it);
+                    continue;
+                }
+
+                SendChallenge(pendingClient.endpoint);
+                pendingClient.lastMessageTime = now;
+                pendingClient.retries--;
+            }
+
+            it++;
+        }
+
+    }
+
+private:
     asio::io_context m_Context;
     asio::ip::udp::socket m_Socket;
     std::thread m_NetworkThread;
 
-    std::unordered_map<ClientId, UDPConnection> m_PendingClients;
+    asio::steady_timer m_ChallengeTimer;
+    std::unordered_map<asio::ip::udp::endpoint, PendingClient> m_PendingClients;
     std::unordered_map<ClientId, UDPConnection> m_Clients;
     ClientId m_MonotonicClientId = 1;
 
@@ -327,6 +448,14 @@ private:
     // Used when receiving data. Only one receive happens at a time so no need for multiples
     asio::ip::udp::endpoint m_RemoteEndpoint;
     Buffer m_Buffer{512};
+};
+
+struct HandShake
+{
+
+
+    State state = State::Idle;
+    uint32_t serverChallenge = 0; /* Fill with the challenge value received from server */
 };
 
 class UDPClient
@@ -431,18 +560,39 @@ public:
     {
         UDPHeader header;
         Deserialize(header, m_Buffer);
-
-        std::string message;
-        m_Buffer.Read(message);
         
         std::println
         (
-            "Received {} bytes from {}:{}: {}",
+            "Received {} bytes from {}:{}",
             m_Buffer.Size(),
             m_RemoteEndpoint.address().to_string(),
-            m_RemoteEndpoint.port(),
-            message
+            m_RemoteEndpoint.port()
         );
+
+        switch(header.messageType)
+        {
+        case MessageType::CHALLENGE:
+        {
+            uint32_t challenge = 0;
+            m_Buffer.Read(challenge);
+            std::println("Challenge received from server: {}.", challenge);
+
+            // Todo implement challenge response
+            // std::println("Sending challenge response.");
+            
+        } break;
+        default:
+        {
+            std::string message;
+            m_Buffer.Read(message);
+            
+            std::println
+            (
+                "String received from server: {}.",
+                message
+            );
+        }
+        }
     }
 
     bool Send(const std::string& message, bool reliable = false)
@@ -492,11 +642,24 @@ public:
     }
 
 private:
+    enum class State
+    {
+        Idle,
+        SentJoin,
+        ReceivedChallenge,
+        SentChallengeResponse,
+        ReceivedWelcome,
+        Connected
+    };
+
+private:
     asio::io_context m_Context;
     asio::ip::udp::socket m_Socket;
     std::thread m_NetworkThread;
     asio::ip::udp::endpoint m_ServerAddress;
 
+    State m_ConnectionState = State::Idle;
+    
     PacketSequencer m_PacketSequencer;
 
     uint32_t m_SendSequence = 0;
