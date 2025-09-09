@@ -381,7 +381,13 @@ private:
         {
             if(ec)
             {
-                std::println("Broadcast failed for {}:{}", endpoint.address().to_string(), endpoint.port());
+                std::println
+                (
+                    "Broadcast failed for {}:{}: {}",
+                    endpoint.address().to_string(),
+                    endpoint.port(),
+                    ec.message()
+                );
             }
         });        
     }
@@ -450,18 +456,10 @@ private:
     Buffer m_Buffer{512};
 };
 
-struct HandShake
-{
-
-
-    State state = State::Idle;
-    uint32_t serverChallenge = 0; /* Fill with the challenge value received from server */
-};
-
 class UDPClient
 {
 public:
-    UDPClient() : m_Context(), m_Socket(m_Context)
+    UDPClient() : m_Context(), m_Socket(m_Context), m_Handshake(m_Context)
     {
         std::println("UDPClient constructed.");
     }
@@ -492,6 +490,8 @@ public:
 
             ScheduleReceive();
             std::println("Client created at {}:{}", m_Socket.local_endpoint().address().to_string(), m_Socket.local_endpoint().port());
+
+            ScheduleJoinServer();
 
             m_NetworkThread = std::thread([this]()
             {
@@ -556,6 +556,65 @@ public:
         });        
     }
 
+    bool Send(const std::string& message, bool reliable = false)
+    {
+        std::println("Attempting to send data to server.");
+
+        try
+        {
+            UDPHeader header;
+            header.sequence = m_SendSequence++;
+
+            const auto now = std::chrono::system_clock::now();
+            header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+
+            header.messageType = MessageType::CONNECTION_REQUEST;
+            
+            /* Create message containing data ie. serialize data */
+            auto newBuffer = std::make_shared<Networking::Buffer>(sizeof(UDPHeader) + sizeof(std::size_t) + message.size());
+            Serialize(header, *newBuffer);
+            newBuffer->Write(message);
+
+            // /* Send to the socket */
+            // m_Socket.async_send_to(asio::buffer(newBuffer->Data(), newBuffer->Size()), m_ServerAddress, [newBuffer](std::error_code ec, std::size_t length)
+            // {
+            //     if(!ec)
+            //     {
+            //         std::println("Data sent successfully.");
+            //     }
+            //     else
+            //     {
+            //         std::println("Error: async_send_to: {}", ec.message());
+            //     }
+            // });
+
+            Send(newBuffer);
+
+            return true;
+        }
+        catch(const std::exception& e)
+        {
+            std::println("UDPClient::Send failed: {}", e.what());
+            return false;
+        }
+    }
+
+    void Send(std::shared_ptr<Networking::Buffer> buffer)
+    {
+        m_Socket.async_send_to(asio::buffer(buffer->Data(), buffer->Size()), m_ServerAddress, [buffer](std::error_code ec, std::size_t length)
+        {
+            if(!ec)
+            {
+                std::println("[Info] Data sent to server");
+            }
+            else
+            {
+                std::println("[Error] async_send_to: {}", ec.message());
+            }
+        });
+    }
+
+private:
     void HandleDatagram()
     {
         UDPHeader header;
@@ -563,7 +622,7 @@ public:
         
         std::println
         (
-            "Received {} bytes from {}:{}",
+            "[Client] Received {} bytes from {}:{}",
             m_Buffer.Size(),
             m_RemoteEndpoint.address().to_string(),
             m_RemoteEndpoint.port()
@@ -591,75 +650,79 @@ public:
                 "String received from server: {}.",
                 message
             );
-        }
-        }
-    }
-
-    bool Send(const std::string& message, bool reliable = false)
-    {
-        std::println("Attempting to send data to server.");
-
-        try
-        {
-            UDPHeader header;
-            header.sequence = m_SendSequence++;
-
-            const auto now = std::chrono::system_clock::now();
-            header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-
-            header.messageType = MessageType::CONNECTION_REQUEST;
-            
-            /* Create message containing data ie. serialize data */
-            auto newBuffer = std::make_shared<Networking::Buffer>(sizeof(UDPHeader) + sizeof(std::size_t) + message.size());
-            Serialize(header, *newBuffer);
-            newBuffer->Write(message);
-
-            /* Send to the socket */
-            m_Socket.async_send_to(asio::buffer(newBuffer->Data(), newBuffer->Size()), m_ServerAddress, [newBuffer](std::error_code ec, std::size_t length)
-            {
-                if(!ec)
-                {
-                    std::println("Data sent successfully.");
-                }
-                else
-                {
-                    std::println("Error: async_send_to: {}", ec.message());
-                }
-            });
-
-            return true;
-        }
-        catch(const std::exception& e)
-        {
-            std::println("UDPClient::Send failed: {}", e.what());
-            return false;
+        } break;
         }
     }
-    
+
     bool IsSequenceNewer(uint32_t lhs, uint32_t rhs)
     {
         return static_cast<int32_t>(lhs - rhs) > 0;
     }
+    
+    void ScheduleJoinServer()
+    {
+        if(m_Handshake.state != Handshake::State::Offline)
+            return;
+        
+        using namespace std::chrono_literals;
+
+        m_Handshake.timer.expires_after(100ms);
+        m_Handshake.timer.async_wait([&](std::error_code ec)
+        {
+            if(!ec)
+            {
+                switch(m_Handshake.state)
+                {
+                case Handshake::State::Offline:
+                {
+
+                } break;
+                case Handshake::State::ReceivedChallenge:
+                {
+
+                } break;
+                default:
+                    // Ignore rest (:
+                }
+            }
+            else
+            {
+                m_Handshake.state = Handshake::State::Offline;
+
+                std::println("[HandShake][Error]: steady_timer.async_wait: {}", ec.message());
+            }
+        });
+    }
 
 private:
-    enum class State
+    struct Handshake
     {
-        Idle,
-        SentJoin,
-        ReceivedChallenge,
-        SentChallengeResponse,
-        ReceivedWelcome,
-        Connected
+        enum class State
+        {
+            Offline,
+            SentJoin,
+            ReceivedChallenge,
+            SentChallengeResponse,
+            ReceivedWelcome,
+            Online
+        };
+
+        State state = State::Offline;
+        uint32_t serverChallenge = 0;
+
+        int retries = 5;
+        asio::steady_timer timer;
+
+        Handshake(asio::io_context& io) : timer(io) {}
     };
 
-private:
     asio::io_context m_Context;
     asio::ip::udp::socket m_Socket;
     std::thread m_NetworkThread;
     asio::ip::udp::endpoint m_ServerAddress;
-
-    State m_ConnectionState = State::Idle;
     
+    Handshake m_Handshake;
+
     PacketSequencer m_PacketSequencer;
 
     uint32_t m_SendSequence = 0;
