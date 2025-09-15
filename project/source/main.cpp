@@ -1,7 +1,7 @@
 #include <print>
 #include <chrono>
 
-#include <SDKDDKVer.h>
+// #include <SDKDDKVer.h>
 #include <asio.hpp>
 
 #include <SDL3/SDL.h>

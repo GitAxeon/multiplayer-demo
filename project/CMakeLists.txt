@@ -48,13 +48,13 @@ add_library(stb INTERFACE)
 target_include_directories(stb INTERFACE ${stb_SOURCE_DIR})
 
 # Include asio
-FetchContent_Declare(asio
+FetchContent_Declare(asio_fetch
     GIT_REPOSITORY https://github.com/chriskohlhoff/asio.git
 )
-FetchContent_MakeAvailable(asio)
+FetchContent_MakeAvailable(asio_fetch)
 
 add_library(asio INTERFACE)
-target_include_directories(asio INTERFACE ${asio_SOURCE_DIR}/asio/include/)
+target_include_directories(asio INTERFACE ${asio_fetch_SOURCE_DIR}/asio/include/)
 
 FetchContent_Declare(
   yaml-cpp
@@ -69,14 +69,14 @@ file(GLOB_RECURSE SourceFiles CONFIGURE_DEPENDS
 add_executable(Application ${SourceFiles})
 target_link_libraries(Application PRIVATE SDL3::SDL3 imgui stb glm::glm asio yaml-cpp::yaml-cpp)
 
-add_custom_command(TARGET Application POST_BUILD
-    # Copy runtime deps
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        $<TARGET_RUNTIME_DLLS:Application>
-        $<TARGET_FILE_DIR:Application>
-        COMMAND_EXPAND_LISTS
-    COMMENT "Copying runtime dependencies to output folder "
-)
+#add_custom_command(TARGET Application POST_BUILD
+#    # Copy runtime deps
+#    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+#        $<TARGET_RUNTIME_DLLS:Application>
+#        $<TARGET_FILE_DIR:Application>
+#        COMMAND_EXPAND_LISTS
+#    COMMENT "Copying runtime dependencies to output folder "
+#)
 
 add_custom_command(TARGET Application POST_BUILD
     # Copy resources 

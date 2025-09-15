@@ -2,16 +2,18 @@
 
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <vector>
 #include <print>
 #include <thread>
-#include <span>
 #include <memory>
 #include <bitset>
 #include <unordered_map>
-#include <functional>
 
-#include <SDKDDKVer.h>
+#if defined(__WIN32__)
+    #include <SDKDDKVer.h>
+#endif
+
 #include <asio.hpp>
 
 #include "NetworkBuffer.h"
@@ -23,7 +25,9 @@ enum class MessageType : uint8_t
 {
     CONNECTION_REQUEST,
     CHALLENGE,
-    CHALLENGE_RESPONSE
+    CHALLENGE_RESPONSE,
+    MESSAGE,
+    ACKNOWLEDGE
 };
 
 inline static uint32_t sProtocol {88173283U};
@@ -118,7 +122,7 @@ void Deserialize(T&, Buffer&)
 }
 
 template<>
-void Serialize(const UDPHeader& header, Buffer& buffer)
+inline void Serialize(const UDPHeader& header, Buffer& buffer)
 {
     buffer.Write(header.protocol);
     buffer.Write(header.sequence);
@@ -129,7 +133,7 @@ void Serialize(const UDPHeader& header, Buffer& buffer)
 }
 
 template<>
-void Deserialize(UDPHeader& header, Buffer& buffer)
+inline void Deserialize(UDPHeader& header, Buffer& buffer)
 {
     buffer.Read(header.protocol);
     buffer.Read(header.sequence);
@@ -252,13 +256,14 @@ public:
         {
         case MessageType::CONNECTION_REQUEST:
         {
-            auto result = m_PendingClients.find(endpoint);
+            auto clientIterator = m_PendingClients.find(endpoint);
 
-            /* Todo: Random generate */
-            const uint32_t challenge = 123456;
-
-            if(result == m_PendingClients.end())
+            if(clientIterator == m_PendingClients.end())
             {
+                std::println("Received connection request from {}:{}", endpoint.address().to_string(), endpoint.port());
+                
+                /* Todo: Random generate */
+                const uint32_t challenge = 123456;
                 m_PendingClients[endpoint] = PendingClient
                 {
                     .endpoint = endpoint,
@@ -268,54 +273,101 @@ public:
                 
                 SendChallenge(endpoint);
             }
+            else
+            {
+                std::println("Ignoring duplicate connection request from {}:{}", endpoint.address().to_string(), endpoint.port());
+            }
 
         } break;
+        case MessageType::CHALLENGE: { return; } break;
         case MessageType::CHALLENGE_RESPONSE:
-        break;
-        // default:
-
-        //     // Oop
-        }
-
-        if(header.messageType == MessageType::CONNECTION_REQUEST)
         {
-            if(m_Clients.find(header.clientId) != m_Clients.end())
+            auto pendingClient = m_PendingClients.find(endpoint);
+            
+            if(pendingClient == m_PendingClients.end())
             {
-                std::println("Connection request from an already connected client?");
+                std::println
+                (
+                    "Unexpectedly received challenge response from unknown client: {}:{}",
+                    endpoint.address().to_string(),
+                    endpoint.port()
+                );
+
                 return;
             }
+
+            uint32_t receivedChallenge = 0;
+            m_Buffer.Read(receivedChallenge);
+
+            if(receivedChallenge != pendingClient->second.challenge)
+            {
+                std::println
+                (
+                    "Challenge response didn't match expected value. Expected {} but received {} instead. Pending connection dropped in response.",
+                    pendingClient->second.challenge, 
+                    receivedChallenge
+                );
+
+                m_PendingClients.erase(pendingClient);
+
+                return;
+            }
+
+            m_PendingClients.erase(pendingClient);
 
             m_Clients[m_MonotonicClientId] = UDPConnection();
             m_Clients[m_MonotonicClientId].endpoint = endpoint;
             m_Clients[m_MonotonicClientId].lastMessageTime = UDPConnection::Clock::now();
-            
-            std::println(
-                "New client [id: {}] from [{}:{}]",
-                m_MonotonicClientId,
-                endpoint.address().to_string(),
-                endpoint.port()
-            );
+
+            std::println("Upgraded {} from pending connection", m_MonotonicClientId);
+
 
             m_MonotonicClientId++;
 
-            return;
+        } break;
+        case MessageType::MESSAGE:
+        {
+            std::string message;
+            m_Buffer.Read(message);
+
+            std::println
+            (
+                "[{}] Received {} bytes from {}:{}: {}",
+                header.timestamp,
+                m_Buffer.Size(),
+                endpoint.address().to_string(),
+                endpoint.port(),
+                message
+            );
+        } break;
         }
 
-        std::string message;
-        m_Buffer.Read(message);
+        // if(header.messageType == MessageType::CONNECTION_REQUEST)
+        // {
+        //     if(m_Clients.find(header.clientId) != m_Clients.end())
+        //     {
+        //         std::println("Connection request from an already connected client?");
+        //         return;
+        //     }
 
-        std::println
-        (
-            "[{}] Received {} bytes from {}:{}: {}",
-            header.timestamp,
-            m_Buffer.Size(),
-            endpoint.address().to_string(),
-            endpoint.port(),
-            message
-        );
+        //     m_Clients[m_MonotonicClientId] = UDPConnection();
+        //     m_Clients[m_MonotonicClientId].endpoint = endpoint;
+        //     m_Clients[m_MonotonicClientId].lastMessageTime = UDPConnection::Clock::now();
+            
+        //     std::println(
+        //         "New client [id: {}] from [{}:{}]",
+        //         m_MonotonicClientId,
+        //         endpoint.address().to_string(),
+        //         endpoint.port()
+        //     );
+
+        //     m_MonotonicClientId++;
+
+        //     return;
+        // }
     }
 
-    void Broadcast(const std::string& message, bool reliable = false)
+    void Broadcast(const std::string& message, UDPFlag)
     {
         UDPHeader header;
 
@@ -351,14 +403,16 @@ public:
         m_IncomingMessages.erase(m_IncomingMessages.begin());
         
         m_IncomingMessageMutex.unlock();
+
+        return true; 
     }
 
 private:
     void SendChallenge(asio::ip::udp::endpoint endpoint)
     {
-        auto searchResult = m_PendingClients.find(endpoint);
+        const auto clientIterator = m_PendingClients.find(endpoint);
         
-        if(searchResult == m_PendingClients.end())
+        if(clientIterator == m_PendingClients.end())
             return;
 
         UDPHeader header;
@@ -370,7 +424,7 @@ private:
         auto buffer = std::make_shared<Networking::Buffer>(sizeof(UDPHeader) + sizeof(uint32_t));
 
         Serialize(header, *buffer);
-        buffer->Write(searchResult->second.challenge);
+        buffer->Write(clientIterator->second.challenge);
         
         Send(endpoint, buffer);
     }
@@ -422,7 +476,7 @@ private:
             auto& pendingClient = it->second;
             if(now - pendingClient.lastMessageTime > 200ms)
             {
-                if(pendingClient.retries <= 0)
+                if(pendingClient.retries <= 1)
                 {
                     it = m_PendingClients.erase(it);
                     continue;
@@ -488,9 +542,8 @@ public:
             m_Socket.bind(udp::endpoint(udp::v4(), 0));
             m_ServerAddress = remoteEndpoint;
 
-            ScheduleReceive();
             std::println("Client created at {}:{}", m_Socket.local_endpoint().address().to_string(), m_Socket.local_endpoint().port());
-
+            ScheduleReceive();
             ScheduleJoinServer();
 
             m_NetworkThread = std::thread([this]()
@@ -568,25 +621,12 @@ public:
             const auto now = std::chrono::system_clock::now();
             header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
 
-            header.messageType = MessageType::CONNECTION_REQUEST;
+            header.messageType = MessageType::MESSAGE;
             
             /* Create message containing data ie. serialize data */
             auto newBuffer = std::make_shared<Networking::Buffer>(sizeof(UDPHeader) + sizeof(std::size_t) + message.size());
             Serialize(header, *newBuffer);
             newBuffer->Write(message);
-
-            // /* Send to the socket */
-            // m_Socket.async_send_to(asio::buffer(newBuffer->Data(), newBuffer->Size()), m_ServerAddress, [newBuffer](std::error_code ec, std::size_t length)
-            // {
-            //     if(!ec)
-            //     {
-            //         std::println("Data sent successfully.");
-            //     }
-            //     else
-            //     {
-            //         std::println("Error: async_send_to: {}", ec.message());
-            //     }
-            // });
 
             Send(newBuffer);
 
@@ -594,7 +634,7 @@ public:
         }
         catch(const std::exception& e)
         {
-            std::println("UDPClient::Send failed: {}", e.what());
+            std::println("[Error]:[UDPClient]: Send failed: {}", e.what());
             return false;
         }
     }
@@ -632,13 +672,19 @@ private:
         {
         case MessageType::CHALLENGE:
         {
-            uint32_t challenge = 0;
-            m_Buffer.Read(challenge);
-            std::println("Challenge received from server: {}.", challenge);
+            if(m_Handshake.state != Handshake::State::SentJoin)
+            {
+                std::println("Unexpectedly received challenge from Server. Ignoring packet. HandshakeState: {}", static_cast<uint32_t>(m_Handshake.state));
+                return;
+            }
 
-            // Todo implement challenge response
-            // std::println("Sending challenge response.");
-            
+            m_Buffer.Read(m_Handshake.serverChallenge);
+            std::println("Challenge received from server: {}.", m_Handshake.serverChallenge);
+            m_Handshake.state = Handshake::State::ReceivedChallenge;
+
+            SendChallengeResponse();
+            m_Handshake.lastMessageTime = std::chrono::steady_clock::now();
+            std::println("Sent challenge response");
         } break;
         default:
         {
@@ -658,12 +704,41 @@ private:
     {
         return static_cast<int32_t>(lhs - rhs) > 0;
     }
+
+    void SendJoin()
+    {
+        UDPHeader header;
+
+        const auto now = std::chrono::system_clock::now();
+        header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+
+        header.messageType = MessageType::CONNECTION_REQUEST;
+        
+        auto buffer = std::make_shared<Networking::Buffer>(sizeof(UDPHeader));
+
+        Serialize(header, *buffer);
+        Send(buffer);
+    }
+
+    void SendChallengeResponse()
+    {
+        UDPHeader header;
+
+        const auto now = std::chrono::system_clock::now();
+        header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+
+        header.messageType = MessageType::CHALLENGE_RESPONSE;
+        
+        auto buffer = std::make_shared<Networking::Buffer>(sizeof(UDPHeader) + sizeof(Handshake::serverChallenge));
+
+        Serialize(header, *buffer);
+        buffer->Write(m_Handshake.serverChallenge);
+
+        Send(buffer);        
+    }
     
     void ScheduleJoinServer()
-    {
-        if(m_Handshake.state != Handshake::State::Offline)
-            return;
-        
+    {        
         using namespace std::chrono_literals;
 
         m_Handshake.timer.expires_after(100ms);
@@ -671,25 +746,52 @@ private:
         {
             if(!ec)
             {
+                bool retry = true;
+
                 switch(m_Handshake.state)
                 {
                 case Handshake::State::Offline:
+                case Handshake::State::SentJoin:
                 {
-
+                    if(std::chrono::steady_clock::now() - m_Handshake.lastMessageTime >= 200ms)
+                    {
+                        SendJoin();
+                        m_Handshake.lastMessageTime = std::chrono::steady_clock::now();
+                    }
+                    
                 } break;
                 case Handshake::State::ReceivedChallenge:
+                case Handshake::State::SentChallengeResponse:
                 {
+                    if(std::chrono::steady_clock::now() - m_Handshake.lastMessageTime >= 200ms)
+                    {
+                        if(m_Handshake.retries <= 1)
+                        {
+                            std::println("Connection attempt timed out.");
 
+                            m_Handshake.state = Handshake::State::Offline;
+                            m_Handshake.retries = 5;
+                            retry = false;
+                        }
+
+                        SendChallengeResponse();
+                        m_Handshake.lastMessageTime = std::chrono::steady_clock::now();
+                        m_Handshake.retries--;
+                    }
                 } break;
-                default:
-                    // Ignore rest (:
+                }
+
+                if(retry)
+                {
+                    ScheduleJoinServer();
                 }
             }
             else
             {
                 m_Handshake.state = Handshake::State::Offline;
+                m_Handshake.retries = 5;
 
-                std::println("[HandShake][Error]: steady_timer.async_wait: {}", ec.message());
+                std::println("[Error]:[HandShake]: steady_timer.async_wait: {}", ec.message());
             }
         });
     }
@@ -710,12 +812,14 @@ private:
         State state = State::Offline;
         uint32_t serverChallenge = 0;
 
+        std::chrono::steady_clock::time_point lastMessageTime;
         int retries = 5;
         asio::steady_timer timer;
 
         Handshake(asio::io_context& io) : timer(io) {}
     };
 
+private:
     asio::io_context m_Context;
     asio::ip::udp::socket m_Socket;
     std::thread m_NetworkThread;
