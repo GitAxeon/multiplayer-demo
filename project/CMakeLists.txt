@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.30)
 project(MyProject)
 
 set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
@@ -69,14 +70,14 @@ file(GLOB_RECURSE SourceFiles CONFIGURE_DEPENDS
 add_executable(Application ${SourceFiles})
 target_link_libraries(Application PRIVATE SDL3::SDL3 imgui stb glm::glm asio yaml-cpp::yaml-cpp)
 
-#add_custom_command(TARGET Application POST_BUILD
-#    # Copy runtime deps
-#    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-#        $<TARGET_RUNTIME_DLLS:Application>
-#        $<TARGET_FILE_DIR:Application>
-#        COMMAND_EXPAND_LISTS
-#    COMMENT "Copying runtime dependencies to output folder "
-#)
+add_custom_command(TARGET Application POST_BUILD
+   # Copy runtime deps
+   COMMAND ${CMAKE_COMMAND} -E copy_if_different
+       $<TARGET_RUNTIME_DLLS:Application>
+       $<TARGET_FILE_DIR:Application>
+       COMMAND_EXPAND_LISTS
+   COMMENT "Copying runtime dependencies to output folder "
+)
 
 add_custom_command(TARGET Application POST_BUILD
     # Copy resources 

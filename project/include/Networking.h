@@ -26,6 +26,7 @@ enum class MessageType : uint8_t
     CONNECTION_REQUEST,
     CHALLENGE,
     CHALLENGE_RESPONSE,
+    WELCOME,
     MESSAGE,
     ACKNOWLEDGE
 };
@@ -282,30 +283,43 @@ public:
         case MessageType::CHALLENGE: { return; } break;
         case MessageType::CHALLENGE_RESPONSE:
         {
+            uint32_t challenge = 0;
+            m_Buffer.Read(challenge);
+
+            std::println("Challenge response received from {}:{}: {}", endpoint.address().to_string(), endpoint.port(), challenge);
+
             auto pendingClient = m_PendingClients.find(endpoint);
             
             if(pendingClient == m_PendingClients.end())
             {
-                std::println
-                (
-                    "Unexpectedly received challenge response from unknown client: {}:{}",
-                    endpoint.address().to_string(),
-                    endpoint.port()
-                );
+                // If connection has already been upgraded
+                ClientId id = 0;
+                m_Buffer.Read(id);
+
+                if(id && m_Clients.find(id) != m_Clients.end())
+                {
+                    SendWelcome(id);
+                }
+                else
+                {
+                    std::println
+                    (
+                        "Unexpectedly received challenge response from unknown client: {}:{}",
+                        endpoint.address().to_string(),
+                        endpoint.port()
+                    );
+                }
 
                 return;
             }
 
-            uint32_t receivedChallenge = 0;
-            m_Buffer.Read(receivedChallenge);
-
-            if(receivedChallenge != pendingClient->second.challenge)
+            if(challenge != pendingClient->second.challenge)
             {
                 std::println
                 (
                     "Challenge response didn't match expected value. Expected {} but received {} instead. Pending connection dropped in response.",
                     pendingClient->second.challenge, 
-                    receivedChallenge
+                    challenge
                 );
 
                 m_PendingClients.erase(pendingClient);
@@ -321,6 +335,7 @@ public:
 
             std::println("Upgraded {} from pending connection", m_MonotonicClientId);
 
+            SendWelcome(m_MonotonicClientId);
 
             m_MonotonicClientId++;
 
@@ -341,42 +356,20 @@ public:
             );
         } break;
         }
-
-        // if(header.messageType == MessageType::CONNECTION_REQUEST)
-        // {
-        //     if(m_Clients.find(header.clientId) != m_Clients.end())
-        //     {
-        //         std::println("Connection request from an already connected client?");
-        //         return;
-        //     }
-
-        //     m_Clients[m_MonotonicClientId] = UDPConnection();
-        //     m_Clients[m_MonotonicClientId].endpoint = endpoint;
-        //     m_Clients[m_MonotonicClientId].lastMessageTime = UDPConnection::Clock::now();
-            
-        //     std::println(
-        //         "New client [id: {}] from [{}:{}]",
-        //         m_MonotonicClientId,
-        //         endpoint.address().to_string(),
-        //         endpoint.port()
-        //     );
-
-        //     m_MonotonicClientId++;
-
-        //     return;
-        // }
     }
 
-    void Broadcast(const std::string& message, UDPFlag)
+    void Broadcast(const std::string& message, UDPFlag reliability = UDP_Unreliable)
     {
         UDPHeader header;
 
         const auto now = std::chrono::system_clock::now();
         header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+        header.messageType = MessageType::MESSAGE;
 
         for(auto& [id, client] : m_Clients)
         {
-            header.sequence = client.sequencer.ObtainNewSequence();
+            header.clientId = id;
+            // header.sequence = client.sequencer.ObtainNewSequence();
             auto buffer = std::make_shared<Networking::Buffer>(sizeof(UDPHeader) + sizeof(std::size_t) + message.length());
 
             Serialize(header, *buffer);
@@ -427,6 +420,40 @@ private:
         buffer->Write(clientIterator->second.challenge);
         
         Send(endpoint, buffer);
+    }
+
+    void SendWelcome(ClientId id)
+    {
+        const auto clientIterator = m_Clients.find(id);
+        
+        if(clientIterator == m_Clients.end())
+            return;
+
+        UDPHeader header;
+        header.messageType = MessageType::WELCOME;
+
+        const auto now = std::chrono::system_clock::now();
+        header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+
+        auto buffer = std::make_shared<Networking::Buffer>(sizeof(UDPHeader) + sizeof(ClientId));
+
+        Serialize(header, *buffer);
+        buffer->Write(id);
+        
+        Send(clientIterator->second.endpoint, buffer);        
+    }
+
+    void Send(ClientId clientId, std::shared_ptr<Networking::Buffer> buffer, UDPFlag reliable = UDP_Unreliable)
+    {
+        auto clientIterator = m_Clients.find(clientId);
+
+        if(clientIterator == m_Clients.end())
+        {
+            std::println("Attempted to send message to an offline client with id {}", clientId);
+            return;
+        }
+        
+        Send(clientIterator->second.endpoint, buffer);
     }
 
     void Send(asio::ip::udp::endpoint endpoint, std::shared_ptr<Networking::Buffer> buffer)
@@ -582,7 +609,6 @@ public:
 
     void ScheduleReceive()
     {
-        std::println("UDPClient preparing to receive data from server.");
         m_Buffer.Clear();
 
         m_Socket.async_receive_from(asio::buffer(m_Buffer.Data(), m_Buffer.Capacity()), m_RemoteEndpoint, [this](std::error_code ec, std::size_t length)
@@ -597,7 +623,6 @@ public:
 
             if(!ec)
             {
-                // HandleDatagram(std::span<std::byte>(m_ReceiveBuffer.data(), length));
                 HandleDatagram();
             }
             else
@@ -621,6 +646,7 @@ public:
             const auto now = std::chrono::system_clock::now();
             header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
 
+            header.clientId = m_ClientId;
             header.messageType = MessageType::MESSAGE;
             
             /* Create message containing data ie. serialize data */
@@ -643,11 +669,7 @@ public:
     {
         m_Socket.async_send_to(asio::buffer(buffer->Data(), buffer->Size()), m_ServerAddress, [buffer](std::error_code ec, std::size_t length)
         {
-            if(!ec)
-            {
-                std::println("[Info] Data sent to server");
-            }
-            else
+            if(ec)
             {
                 std::println("[Error] async_send_to: {}", ec.message());
             }
@@ -659,14 +681,6 @@ private:
     {
         UDPHeader header;
         Deserialize(header, m_Buffer);
-        
-        std::println
-        (
-            "[Client] Received {} bytes from {}:{}",
-            m_Buffer.Size(),
-            m_RemoteEndpoint.address().to_string(),
-            m_RemoteEndpoint.port()
-        );
 
         switch(header.messageType)
         {
@@ -680,13 +694,28 @@ private:
 
             m_Buffer.Read(m_Handshake.serverChallenge);
             std::println("Challenge received from server: {}.", m_Handshake.serverChallenge);
-            m_Handshake.state = Handshake::State::ReceivedChallenge;
 
+            m_Handshake.Advance(Handshake::State::ReceivedChallenge);
+            
             SendChallengeResponse();
+            m_Handshake.Advance(Handshake::State::SentChallengeResponse);
             m_Handshake.lastMessageTime = std::chrono::steady_clock::now();
+
             std::println("Sent challenge response");
         } break;
-        default:
+        case MessageType::WELCOME:
+        {
+            if(m_Handshake.state == Handshake::State::SentChallengeResponse)
+            {
+                std::println("Connection established with server");
+                m_Handshake.Advance(Handshake::State::ReceivedWelcome); 
+                m_Handshake.lastMessageTime = std::chrono::steady_clock::now();
+                
+                m_Buffer.Read(m_ClientId);
+            }
+
+        } break;
+        case MessageType::MESSAGE:
         {
             std::string message;
             m_Buffer.Read(message);
@@ -757,6 +786,7 @@ private:
                     {
                         SendJoin();
                         m_Handshake.lastMessageTime = std::chrono::steady_clock::now();
+                        m_Handshake.Advance(Handshake::State::SentJoin);
                     }
                     
                 } break;
@@ -765,19 +795,28 @@ private:
                 {
                     if(std::chrono::steady_clock::now() - m_Handshake.lastMessageTime >= 200ms)
                     {
-                        if(m_Handshake.retries <= 1)
+                        if(m_Handshake.retries <= m_Handshake.m_MaxRetries)
+                        {
+                            m_Handshake.Advance(Handshake::State::SentChallengeResponse);
+
+                            SendChallengeResponse();
+                            m_Handshake.lastMessageTime = std::chrono::steady_clock::now();
+
+                        }
+                        else
                         {
                             std::println("Connection attempt timed out.");
 
-                            m_Handshake.state = Handshake::State::Offline;
-                            m_Handshake.retries = 5;
+                            m_Handshake.Abort();
                             retry = false;
                         }
-
-                        SendChallengeResponse();
-                        m_Handshake.lastMessageTime = std::chrono::steady_clock::now();
-                        m_Handshake.retries--;
                     }
+                } break;
+                case Handshake::State::ReceivedWelcome:
+                {
+                    // m_Handshake.retries = 5;
+                    // m_Handshake.state = Handshake::State::ReceivedWelcome;
+                    retry = false;
                 } break;
                 }
 
@@ -809,12 +848,68 @@ private:
             Online
         };
 
+        void Advance(State newState)
+        {
+            switch(state)
+            {
+            case State::Offline:
+            {
+                if(newState == State::SentJoin)
+                {
+                    state = State::SentJoin;
+                    retries = 0;
+                }
+            } break;
+            case State::SentJoin:
+            {
+                if(newState == State::ReceivedChallenge)
+                {
+                    state = State::ReceivedChallenge;
+                }
+                else if(newState == State::SentJoin)
+                {
+                    retries++;
+                }
+
+            } break;
+            case State::ReceivedChallenge:
+            {
+                if(newState == State::SentChallengeResponse)
+                {
+                    state = State::SentChallengeResponse;
+                    retries = 0;
+                }
+            } break;
+            case State::SentChallengeResponse:
+            {
+                if(newState == State::ReceivedWelcome)
+                {
+                    state = State::ReceivedWelcome;
+                    retries = 0;
+                }
+                else if(newState == State::SentChallengeResponse)
+                {
+                    retries++;
+                }
+            } break;
+            }
+        }
+
+        void Abort()
+        {
+            state = State::Offline;
+            retries = 0;
+            serverChallenge = 0;
+        }
+
         State state = State::Offline;
         uint32_t serverChallenge = 0;
 
         std::chrono::steady_clock::time_point lastMessageTime;
-        int retries = 5;
+        int retries = 0;
         asio::steady_timer timer;
+
+        int m_MaxRetries = 5;
 
         Handshake(asio::io_context& io) : timer(io) {}
     };
@@ -832,6 +927,7 @@ private:
     uint32_t m_SendSequence = 0;
     uint32_t m_LastServerSequence = 0;
     std::bitset<1024>  m_ReceivedPackets;
+    ClientId m_ClientId = 0;
 
     // Used for receiving
     asio::ip::udp::endpoint m_RemoteEndpoint;
