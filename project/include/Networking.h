@@ -21,6 +21,12 @@
 namespace Networking
 {
 
+uint64_t TimeAsMilliseconds()
+{
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
+
 enum class MessageType : uint8_t
 {
     CONNECTION_REQUEST,
@@ -28,7 +34,8 @@ enum class MessageType : uint8_t
     CHALLENGE_RESPONSE,
     WELCOME,
     MESSAGE,
-    ACKNOWLEDGE
+    ACKNOWLEDGE,
+    DISCONNECT
 };
 
 inline static uint32_t sProtocol {88173283U};
@@ -43,9 +50,9 @@ public:
     
     uint32_t ObtainNewSequence()
     {
-        auto old = m_SequenceNumber;
-        m_SequenceNumber++;
-        return old;
+        // auto old = m_SequenceNumber;
+        // m_SequenceNumber++;
+        return m_SequenceNumber++;
     }
 
     uint32_t ExpectedSequence() const
@@ -62,6 +69,8 @@ private:
     uint32_t m_SequenceNumber = 0;
     uint32_t m_ExpectedSequenceNumber = 0;
 };
+
+constexpr int MaxBytesPerPacket = 1400;
 
 using UDPFlag = uint8_t;
 
@@ -81,10 +90,14 @@ struct UDPHeader
     MessageType messageType;
 };
 
-struct UDPMessage
+struct ReliableMessage
 {
-    UDPHeader header;
-    // std::vector<std::byte> data;
+    std::shared_ptr<Buffer> packet;
+    uint32_t sequence = 0;
+    std::chrono::steady_clock::time_point lastSent;
+
+    int retries = 0;
+    int m_MaxRetries = 32;
 };
 
 struct PendingClient
@@ -106,7 +119,7 @@ struct UDPConnection
     asio::ip::udp::endpoint endpoint;
     
     PacketSequencer sequencer;
-    std::array<UDPMessage, 256> resendBuffer;
+    std::unordered_map<uint32_t, ReliableMessage> resendBuffer;
     std::bitset<1024> receivedPackets;
 };
 
@@ -147,7 +160,7 @@ inline void Deserialize(UDPHeader& header, Buffer& buffer)
 class UDPServer
 {
 public:
-    UDPServer() : m_Context(), m_Socket(m_Context), m_ChallengeTimer(m_Context)
+    UDPServer() : m_Context(), m_Socket(m_Context), m_ChallengeTimer(m_Context), m_HeartbeatTimer(m_Context)
     {
         std::println("UDPServer created");
     }
@@ -183,8 +196,11 @@ public:
             );
 
             m_Buffer.Clear();
+
             ScheduleReceive();
             ScheduleChallengeCheck();
+            ScheduleHeartbeat();
+            ScheduleResend();
 
             m_NetworkThread = std::thread([this]()
             { 
@@ -265,6 +281,7 @@ public:
                 
                 /* Todo: Random generate */
                 const uint32_t challenge = 123456;
+
                 m_PendingClients[endpoint] = PendingClient
                 {
                     .endpoint = endpoint,
@@ -355,6 +372,19 @@ public:
                 message
             );
         } break;
+        case MessageType::DISCONNECT:
+        {
+            if(header.clientId == 0)
+                return;
+
+            auto clientIterator = m_Clients.find(header.clientId);
+            
+            if(clientIterator == m_Clients.end())
+                return;
+            
+            std::println("Disconnect received from {}", header.clientId);
+            m_Clients.erase(clientIterator);
+        } break;
         }
     }
 
@@ -385,20 +415,52 @@ public:
         }
     }
 
-    bool PollMessage(UDPMessage& message)
+    void SendReliable(ClientId id, std::shared_ptr<Buffer> packet)
     {
-        if(m_IncomingMessages.empty())
-            return false;
-        
-        m_IncomingMessageMutex.lock(); 
-            
-        message = *m_IncomingMessages.begin();
-        m_IncomingMessages.erase(m_IncomingMessages.begin());
-        
-        m_IncomingMessageMutex.unlock();
+        auto clientIterator = m_Clients.find(id);
 
-        return true; 
+        if(clientIterator == m_Clients.end())
+            return;
+
+        UDPHeader header;
+        header.clientId = id;
+        header.flags = UDP_Reliable;
+        header.messageType = MessageType::MESSAGE;
+        header.sequence = clientIterator->second.sequencer.ObtainNewSequence();
+        header.timestamp = TimeAsMilliseconds();
+
+        auto packetWithHeader = std::make_shared<Networking::Buffer>(sizeof(UDPHeader) + packet->Size());
+        
+        Serialize(header, *packetWithHeader);
+        packetWithHeader->CopyFrom(*packet);
+
+        ReliableMessage msg
+        {
+            packetWithHeader,
+            header.sequence
+        };
+
+        auto& connection = clientIterator->second;
+        connection.resendBuffer[header.sequence] = msg;
+
+        Send(id, packetWithHeader);
+        connection.resendBuffer[header.sequence].lastSent = std::chrono::steady_clock::now();
     }
+
+    // bool PollMessage(UDPMessage& message)
+    // {
+    //     if(m_IncomingMessages.empty())
+    //         return false;
+        
+    //     m_IncomingMessageMutex.lock(); 
+            
+    //     message = *m_IncomingMessages.begin();
+    //     m_IncomingMessages.erase(m_IncomingMessages.begin());
+        
+    //     m_IncomingMessageMutex.unlock();
+
+    //     return true; 
+    // }
 
 private:
     void SendChallenge(asio::ip::udp::endpoint endpoint)
@@ -485,7 +547,7 @@ private:
                 UpdatePendingClients();
             }
             else
-            {
+             {
                 std::println("Error: steady_timer.async_wait: {}", ec.message());
             }
 
@@ -516,7 +578,22 @@ private:
 
             it++;
         }
+    }
 
+    void ScheduleHeartbeat()
+    {
+        using namespace std::chrono_literals;
+        m_HeartbeatTimer.expires_after(1s);
+        m_HeartbeatTimer.async_wait([&](std::error_code ec)
+        {
+            std::println("Could send heartbeat here?");
+            ScheduleHeartbeat();
+        });
+    }
+
+    void ScheduleResend()
+    {
+        using namespace std::chrono_literals;
     }
 
 private:
@@ -529,8 +606,10 @@ private:
     std::unordered_map<ClientId, UDPConnection> m_Clients;
     ClientId m_MonotonicClientId = 1;
 
+    asio::steady_timer m_HeartbeatTimer;
+
     std::mutex m_IncomingMessageMutex;
-    std::vector<UDPMessage> m_IncomingMessages;
+    // std::vector<UDPMessage> m_IncomingMessages;
     
     // Used when receiving data. Only one receive happens at a time so no need for multiples
     asio::ip::udp::endpoint m_RemoteEndpoint;
@@ -814,8 +893,6 @@ private:
                 } break;
                 case Handshake::State::ReceivedWelcome:
                 {
-                    // m_Handshake.retries = 5;
-                    // m_Handshake.state = Handshake::State::ReceivedWelcome;
                     retry = false;
                 } break;
                 }
@@ -827,10 +904,8 @@ private:
             }
             else
             {
-                m_Handshake.state = Handshake::State::Offline;
-                m_Handshake.retries = 5;
-
-                std::println("[Error]:[HandShake]: steady_timer.async_wait: {}", ec.message());
+                m_Handshake.Abort();
+                std::println("[Error][HandShake]: steady_timer.async_wait: {}", ec.message());
             }
         });
     }
@@ -900,6 +975,7 @@ private:
             state = State::Offline;
             retries = 0;
             serverChallenge = 0;
+            timer.cancel();
         }
 
         State state = State::Offline;

@@ -30,6 +30,8 @@ public:
     void Clear();
     void Reset();
 
+    void CopyFrom(const Buffer& source);
+
     void Read(std::integral auto& destination);
     void Write(const std::integral auto& value);
 
@@ -123,6 +125,14 @@ void Buffer::Clear()
 void Buffer::Reset()
 {
     m_Position = 0;
+}
+
+void Buffer::CopyFrom(const Buffer& source)
+{
+    if(m_Position + source.Size() > m_Capacity)
+        return;
+
+    std::copy(source.Data(), source.Data() + source.Size(), m_Data.get() + m_Position);
 }
 
 void Buffer::Read(std::integral auto& destination)
