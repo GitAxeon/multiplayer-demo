@@ -50,24 +50,59 @@ public:
     
     uint32_t ObtainNewSequence()
     {
-        // auto old = m_SequenceNumber;
-        // m_SequenceNumber++;
         return m_SequenceNumber++;
     }
 
-    uint32_t ExpectedSequence() const
+    uint32_t RemoteSequence() const
     {
-        return m_ExpectedSequenceNumber;
+        return m_RemoteSequenceNumber;
     }
 
-    void UpdateExpectedSequence(uint32_t value)
+    uint32_t AcknowledgeBits() const 
     {
-        m_ExpectedSequenceNumber = value;
+        return m_AcknowledgeBits;
+    }
+
+    void Werk(uint32_t sequenceNumber)
+    {
+        if(IsSequenceNewer(sequenceNumber, m_RemoteSequenceNumber))
+        {        
+            uint32_t diff = sequenceNumber - m_RemoteSequenceNumber;
+            
+            if(diff < 32)
+            {
+                m_AcknowledgeBits <<= diff;
+            }
+            else
+            {
+                m_AcknowledgeBits = 0;
+            }
+
+            m_AcknowledgeBits |= 1;
+            m_RemoteSequenceNumber = sequenceNumber;
+        }
+        else
+        {
+            uint32_t diff = m_RemoteSequenceNumber - sequenceNumber;
+
+            // if the sequence number is old but within the window mark it received
+            if(diff <= 32)
+            {
+                m_AcknowledgeBits |= (1u << (diff - 1));
+            }
+        }
+    }
+
+private:
+    static bool IsSequenceNewer(uint32_t lhs, uint32_t rhs)
+    {
+        return static_cast<int32_t>(lhs - rhs) > 0;
     }
 
 private:
     uint32_t m_SequenceNumber = 0;
-    uint32_t m_ExpectedSequenceNumber = 0;
+    uint32_t m_RemoteSequenceNumber = 0;
+    uint32_t m_AcknowledgeBits = 0;
 };
 
 constexpr int MaxBytesPerPacket = 1400;
@@ -84,6 +119,7 @@ struct UDPHeader
 {
     uint32_t protocol{sProtocol};
     uint32_t sequence{0};
+    uint32_t acknowledgeBits;
     uint64_t timestamp{0};
     UDPFlag flags{0};
     ClientId clientId{0};
@@ -160,7 +196,7 @@ inline void Deserialize(UDPHeader& header, Buffer& buffer)
 class UDPServer
 {
 public:
-    UDPServer() : m_Context(), m_Socket(m_Context), m_ChallengeTimer(m_Context), m_HeartbeatTimer(m_Context)
+    UDPServer() : m_Context(), m_Socket(m_Context), m_ChallengeTimer(m_Context), m_HeartbeatTimer(m_Context), m_ResendTimer(m_Context)
     {
         std::println("UDPServer created");
     }
@@ -267,6 +303,12 @@ public:
         {
             std::println("Protocol mismatch in message header");
             return;
+        }
+
+        if((header.flags & UDP_Reliable) && header.clientId != 0 && m_Clients.find(header.clientId) != m_Clients.end())
+        {
+            auto clientIt = m_Clients.find(header.clientId);
+            clientIt->second.sequencer.Werk(header.sequence);
         }
 
         switch(header.messageType)
@@ -427,6 +469,7 @@ public:
         header.flags = UDP_Reliable;
         header.messageType = MessageType::MESSAGE;
         header.sequence = clientIterator->second.sequencer.ObtainNewSequence();
+        header.acknowledgeBits = clientIterator->second.sequencer.AcknowledgeBits();
         header.timestamp = TimeAsMilliseconds();
 
         auto packetWithHeader = std::make_shared<Networking::Buffer>(sizeof(UDPHeader) + packet->Size());
@@ -532,7 +575,7 @@ private:
                     ec.message()
                 );
             }
-        });        
+        });
     }
 
     void ScheduleChallengeCheck()
@@ -594,6 +637,31 @@ private:
     void ScheduleResend()
     {
         using namespace std::chrono_literals;
+
+        m_ResendTimer.expires_after(31ms);
+        m_ResendTimer.async_wait([&](std::error_code ec)
+        {
+            if(ec == asio::error::operation_aborted)
+                return; // Timer cancelled apparently
+
+            auto now = std::chrono::steady_clock::now();
+
+            for(auto& [id, connection] : m_Clients)
+            {
+                for(auto& [sequence, packet] : connection.resendBuffer)
+                {
+                    if(now - packet.lastSent >= 32ms)
+                    {
+                        Send(id, packet.packet);
+                        packet.lastSent = now;
+                    }
+                }
+                
+                // if(now - connection.lastMessageTime > 1s) disconnect
+            }
+
+            ScheduleResend();
+        });
     }
 
 private:
@@ -607,6 +675,7 @@ private:
     ClientId m_MonotonicClientId = 1;
 
     asio::steady_timer m_HeartbeatTimer;
+    asio::steady_timer m_ResendTimer;
 
     std::mutex m_IncomingMessageMutex;
     // std::vector<UDPMessage> m_IncomingMessages;
@@ -805,12 +874,11 @@ private:
                 message
             );
         } break;
-        }
-    }
+        case MessageType::ACKNOWLEDGE:
+        {
 
-    bool IsSequenceNewer(uint32_t lhs, uint32_t rhs)
-    {
-        return static_cast<int32_t>(lhs - rhs) > 0;
+        } break;
+        }
     }
 
     void SendJoin()
