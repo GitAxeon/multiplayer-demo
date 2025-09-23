@@ -7,7 +7,6 @@
 #include <print>
 #include <thread>
 #include <memory>
-#include <bitset>
 #include <unordered_map>
 
 #if defined(__WIN32__)
@@ -63,7 +62,8 @@ public:
         return m_AcknowledgeBits;
     }
 
-    void Werk(uint32_t sequenceNumber)
+    // Returns true if packet is new ie. not a duplicate
+    bool RecordIncomingSequence(uint32_t sequenceNumber)
     {
         if(IsSequenceNewer(sequenceNumber, m_RemoteSequenceNumber))
         {        
@@ -80,20 +80,31 @@ public:
 
             m_AcknowledgeBits |= 1;
             m_RemoteSequenceNumber = sequenceNumber;
+
+            return true;
         }
         else
         {
             uint32_t diff = m_RemoteSequenceNumber - sequenceNumber;
 
-            // if the sequence number is old but within the window mark it received
-            if(diff <= 32)
+            if(diff >= 32)
             {
-                m_AcknowledgeBits |= (1u << (diff - 1));
+                return false;
             }
+
+            uint32_t mask = 1u << diff;
+
+            if(m_AcknowledgeBits & mask)
+            {
+                return false;
+            }
+
+            // m_AcknowledgeBits |= (1u << (diff - 1));
+            m_AcknowledgeBits |= mask;
+            return true;
         }
     }
 
-private:
     static bool IsSequenceNewer(uint32_t lhs, uint32_t rhs)
     {
         return static_cast<int32_t>(lhs - rhs) > 0;
@@ -119,7 +130,8 @@ struct UDPHeader
 {
     uint32_t protocol{sProtocol};
     uint32_t sequence{0};
-    uint32_t acknowledgeBits;
+    uint32_t acknowledged{0};
+    uint32_t acknowledgeBits{0};
     uint64_t timestamp{0};
     UDPFlag flags{0};
     ClientId clientId{0};
@@ -145,6 +157,59 @@ struct PendingClient
     Clock::time_point lastMessageTime;
     
     int retries = 5;
+    int MaxRetries = 5;
+};
+
+struct ReliabilityLayer
+{
+    // Return true if the message hasn't been acknowledged before
+    bool HandleIncoming(uint32_t remoteSequence, uint32_t acknowledge, uint32_t acknowledgeBits)
+    {
+        bool isNew = sequencer.RecordIncomingSequence(remoteSequence);
+        
+        if(!isNew)
+            return false;
+
+        UpdateResendBuffer(remoteSequence, acknowledgeBits);
+
+        return true;
+    }
+
+    void UpdateResendBuffer(uint32_t acknowledge, uint32_t acknowledgeBits)
+    {
+        for(auto it = resendBuffer.begin(); it != resendBuffer.end();)
+        {
+            uint32_t sequence = it->first;
+
+            bool acknowledged = false;
+
+            if(sequence == acknowledge)
+            {
+                acknowledged = true;
+            }
+            else if(PacketSequencer::IsSequenceNewer(acknowledge, sequence))
+            {
+                uint32_t diff = acknowledge - sequence;
+
+                if(diff <= 32 && (acknowledgeBits & (1u << (diff - 1))) )
+                {
+                    acknowledged = true;
+                }
+            }
+
+            if(acknowledged)
+            {
+                it = resendBuffer.erase(it);
+            }
+            else
+            {
+                it++;
+            }
+        }
+    }
+    
+    PacketSequencer sequencer;
+    std::unordered_map<uint32_t, ReliableMessage> resendBuffer;
 };
 
 struct UDPConnection
@@ -156,7 +221,8 @@ struct UDPConnection
     
     PacketSequencer sequencer;
     std::unordered_map<uint32_t, ReliableMessage> resendBuffer;
-    std::bitset<1024> receivedPackets;
+
+    ReliabilityLayer reliability;
 };
 
 template<typename T>
@@ -308,7 +374,14 @@ public:
         if((header.flags & UDP_Reliable) && header.clientId != 0 && m_Clients.find(header.clientId) != m_Clients.end())
         {
             auto clientIt = m_Clients.find(header.clientId);
-            clientIt->second.sequencer.Werk(header.sequence);
+
+            // clientIt->second.sequencer.RecordIncomingSequence(header.sequence);
+            // UpdateResendBuffer(clientIt->first, header.sequence, header.acknowledgeBits);
+
+            bool isNew = clientIt->second.reliability.HandleIncoming(header.sequence, header.acknowledged, header.acknowledgeBits);
+            
+            if(!isNew)
+                return;
         }
 
         switch(header.messageType)
@@ -441,7 +514,10 @@ public:
         for(auto& [id, client] : m_Clients)
         {
             header.clientId = id;
-            // header.sequence = client.sequencer.ObtainNewSequence();
+            header.sequence = client.sequencer.ObtainNewSequence();
+            header.acknowledged = client.sequencer.RemoteSequence();
+            header.acknowledgeBits = client.sequencer.AcknowledgeBits();
+            
             auto buffer = std::make_shared<Networking::Buffer>(sizeof(UDPHeader) + sizeof(std::size_t) + message.length());
 
             Serialize(header, *buffer);
@@ -469,6 +545,7 @@ public:
         header.flags = UDP_Reliable;
         header.messageType = MessageType::MESSAGE;
         header.sequence = clientIterator->second.sequencer.ObtainNewSequence();
+        header.acknowledged = clientIterator->second.sequencer.RemoteSequence();
         header.acknowledgeBits = clientIterator->second.sequencer.AcknowledgeBits();
         header.timestamp = TimeAsMilliseconds();
 
@@ -649,11 +726,12 @@ private:
             for(auto& [id, connection] : m_Clients)
             {
                 for(auto& [sequence, packet] : connection.resendBuffer)
-                {
+                {                    
                     if(now - packet.lastSent >= 32ms)
                     {
                         Send(id, packet.packet);
                         packet.lastSent = now;
+                        packet.retries++;
                     }
                 }
                 
@@ -662,6 +740,41 @@ private:
 
             ScheduleResend();
         });
+    }
+
+    void UpdateResendBuffer(ClientId id, uint32_t remoteSequence, uint32_t acknowledgeBits)
+    {
+        auto& connection = m_Clients[id];
+        
+        for(auto it = connection.resendBuffer.begin(); it != connection.resendBuffer.end();)
+        {
+            uint32_t sequence = it->first;
+
+            bool acknowledged = false;
+
+            if(sequence == remoteSequence)
+            {
+                acknowledged = true;
+            }
+            else if(PacketSequencer::IsSequenceNewer(remoteSequence, sequence))
+            {
+                uint32_t diff = remoteSequence - sequence;
+
+                if(diff <= 32 && (acknowledgeBits & (1u << diff - 1)) )
+                {
+                    acknowledged = true;
+                }
+            }
+
+            if(acknowledged)
+            {
+                it = connection.resendBuffer.erase(it);
+            }
+            else
+            {
+                it++;
+            }
+        }
     }
 
 private:
