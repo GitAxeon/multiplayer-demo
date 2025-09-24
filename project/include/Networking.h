@@ -561,10 +561,15 @@ public:
         };
 
         auto& connection = clientIterator->second;
-        connection.resendBuffer[header.sequence] = msg;
+        // connection.resendBuffer[header.sequence] = msg;
 
+        // Send(id, packetWithHeader);
+        // connection.resendBuffer[header.sequence].lastSent = std::chrono::steady_clock::now();
+
+        // new 
+        connection.reliability.resendBuffer[header.sequence] = msg;
         Send(id, packetWithHeader);
-        connection.resendBuffer[header.sequence].lastSent = std::chrono::steady_clock::now();
+        connection.reliability.resendBuffer[header.sequence].lastSent = std::chrono::steady_clock::now();
     }
 
     // bool PollMessage(UDPMessage& message)
