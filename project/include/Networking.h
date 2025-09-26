@@ -223,6 +223,11 @@ struct UDPConnection
     std::unordered_map<uint32_t, ReliableMessage> resendBuffer;
 
     ReliabilityLayer reliability;
+
+    bool HandleIncoming(uint32_t remoteSequence, uint32_t acknowledge, uint32_t acknowledgeBits)
+    {
+        return reliability.HandleIncoming(remoteSequence, acknowledge, acknowledgeBits);
+    }
 };
 
 template<typename T>
@@ -378,7 +383,7 @@ public:
             // clientIt->second.sequencer.RecordIncomingSequence(header.sequence);
             // UpdateResendBuffer(clientIt->first, header.sequence, header.acknowledgeBits);
 
-            bool isNew = clientIt->second.reliability.HandleIncoming(header.sequence, header.acknowledged, header.acknowledgeBits);
+            bool isNew = clientIt->second.HandleIncoming(header.sequence, header.acknowledged, header.acknowledgeBits);
             
             if(!isNew)
                 return;
@@ -523,13 +528,7 @@ public:
             Serialize(header, *buffer);
             buffer->Write(message);
         
-            m_Socket.async_send_to(asio::buffer(buffer->Data(), buffer->Size()), client.endpoint, [buffer, client](std::error_code ec, std::size_t length)
-            {
-                if(ec)
-                {
-                    std::println("Broadcast failed for {}:{}", client.endpoint.address().to_string(), client.endpoint.port());
-                }
-            });
+            Send(id, buffer);
         }
     }
 
@@ -651,7 +650,7 @@ private:
             {
                 std::println
                 (
-                    "Broadcast failed for {}:{}: {}",
+                    "Send failed for {}:{}: {}",
                     endpoint.address().to_string(),
                     endpoint.port(),
                     ec.message()
@@ -747,40 +746,40 @@ private:
         });
     }
 
-    void UpdateResendBuffer(ClientId id, uint32_t remoteSequence, uint32_t acknowledgeBits)
-    {
-        auto& connection = m_Clients[id];
+    // void UpdateResendBuffer(ClientId id, uint32_t remoteSequence, uint32_t acknowledgeBits)
+    // {
+    //     auto& connection = m_Clients[id];
         
-        for(auto it = connection.resendBuffer.begin(); it != connection.resendBuffer.end();)
-        {
-            uint32_t sequence = it->first;
+    //     for(auto it = connection.resendBuffer.begin(); it != connection.resendBuffer.end();)
+    //     {
+    //         uint32_t sequence = it->first;
 
-            bool acknowledged = false;
+    //         bool acknowledged = false;
 
-            if(sequence == remoteSequence)
-            {
-                acknowledged = true;
-            }
-            else if(PacketSequencer::IsSequenceNewer(remoteSequence, sequence))
-            {
-                uint32_t diff = remoteSequence - sequence;
+    //         if(sequence == remoteSequence)
+    //         {
+    //             acknowledged = true;
+    //         }
+    //         else if(PacketSequencer::IsSequenceNewer(remoteSequence, sequence))
+    //         {
+    //             uint32_t diff = remoteSequence - sequence;
 
-                if(diff <= 32 && (acknowledgeBits & (1u << diff - 1)) )
-                {
-                    acknowledged = true;
-                }
-            }
+    //             if(diff <= 32 && (acknowledgeBits & (1u << diff - 1)) )
+    //             {
+    //                 acknowledged = true;
+    //             }
+    //         }
 
-            if(acknowledged)
-            {
-                it = connection.resendBuffer.erase(it);
-            }
-            else
-            {
-                it++;
-            }
-        }
-    }
+    //         if(acknowledged)
+    //         {
+    //             it = connection.resendBuffer.erase(it);
+    //         }
+    //         else
+    //         {
+    //             it++;
+    //         }
+    //     }
+    // }
 
 private:
     asio::io_context m_Context;
