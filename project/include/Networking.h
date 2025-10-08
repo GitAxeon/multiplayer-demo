@@ -20,7 +20,7 @@
 namespace Networking
 {
 
-uint64_t TimeAsMilliseconds()
+inline uint64_t TimeAsMilliseconds()
 {
     using namespace std::chrono;
     return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
@@ -511,9 +511,7 @@ public:
     void Broadcast(const std::string& message, UDPFlag reliability = UDP_Unreliable)
     {
         UDPHeader header;
-
-        const auto now = std::chrono::system_clock::now();
-        header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+        header.timestamp = TimeAsMilliseconds();
         header.messageType = MessageType::MESSAGE;
 
         for(auto& [id, client] : m_Clients)
@@ -596,9 +594,7 @@ private:
 
         UDPHeader header;
         header.messageType = MessageType::CHALLENGE;
-
-        const auto now = std::chrono::system_clock::now();
-        header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+        header.timestamp = TimeAsMilliseconds();
 
         auto buffer = std::make_shared<Networking::Buffer>(sizeof(UDPHeader) + sizeof(uint32_t));
 
@@ -617,9 +613,7 @@ private:
 
         UDPHeader header;
         header.messageType = MessageType::WELCOME;
-
-        const auto now = std::chrono::system_clock::now();
-        header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+        header.timestamp = TimeAsMilliseconds();
 
         auto buffer = std::make_shared<Networking::Buffer>(sizeof(UDPHeader) + sizeof(ClientId));
 
@@ -906,10 +900,8 @@ public:
         try
         {
             UDPHeader header;
-            header.sequence = m_SendSequence++;
-
-            const auto now = std::chrono::system_clock::now();
-            header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+            header.sequence = m_PacketSequencer.ObtainNewSequence();
+            header.timestamp = TimeAsMilliseconds();
 
             header.clientId = m_ClientId;
             header.messageType = MessageType::MESSAGE;
@@ -1001,10 +993,7 @@ private:
     void SendJoin()
     {
         UDPHeader header;
-
-        const auto now = std::chrono::system_clock::now();
-        header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-
+        header.timestamp = TimeAsMilliseconds();
         header.messageType = MessageType::CONNECTION_REQUEST;
         
         auto buffer = std::make_shared<Networking::Buffer>(sizeof(UDPHeader));
@@ -1016,10 +1005,7 @@ private:
     void SendChallengeResponse()
     {
         UDPHeader header;
-
-        const auto now = std::chrono::system_clock::now();
-        header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-
+        header.timestamp = TimeAsMilliseconds();
         header.messageType = MessageType::CHALLENGE_RESPONSE;
         
         auto buffer = std::make_shared<Networking::Buffer>(sizeof(UDPHeader) + sizeof(Handshake::serverChallenge));
@@ -1185,9 +1171,9 @@ private:
 
     PacketSequencer m_PacketSequencer;
 
-    uint32_t m_SendSequence = 0;
-    uint32_t m_LastServerSequence = 0;
-    std::bitset<1024>  m_ReceivedPackets;
+    // uint32_t m_SendSequence = 0;
+    // uint32_t m_LastServerSequence = 0;
+    // std::bitset<1024>  m_ReceivedPackets;
     ClientId m_ClientId = 0;
 
     // Used for receiving
