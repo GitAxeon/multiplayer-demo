@@ -901,7 +901,10 @@ public:
         try
         {
             UDPHeader header;
+            header.flags = !reliable ? UDP_Unreliable : UDP_Reliable;
             header.sequence = m_PacketSequencer.ObtainNewSequence();
+            header.acknowledged = m_Server.reliability.sequencer.RemoteSequence();
+            header.acknowledgeBits = m_Server.reliability.sequencer.AcknowledgeBits();
             header.timestamp = TimeAsMilliseconds();
 
             header.clientId = m_ClientId;
@@ -912,7 +915,21 @@ public:
             Serialize(header, *newBuffer);
             newBuffer->Write(message);
 
+            if(reliable)
+            {
+                m_Server.reliability.resendBuffer[header.sequence] = ReliableMessage
+                {
+                    newBuffer,
+                    header.sequence
+                };
+            }
+
             Send(newBuffer);
+
+            if(reliable)
+            {
+                m_Server.reliability.resendBuffer[header.sequence].lastSent = UDPConnection::Clock::now();
+            }
 
             return true;
         }
