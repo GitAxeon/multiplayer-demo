@@ -220,8 +220,6 @@ struct UDPConnection
     asio::ip::udp::endpoint endpoint;
     
     PacketSequencer sequencer;
-    std::unordered_map<uint32_t, ReliableMessage> resendBuffer;
-
     ReliabilityLayer reliability;
 
     bool HandleIncoming(uint32_t remoteSequence, uint32_t acknowledge, uint32_t acknowledgeBits)
@@ -723,7 +721,7 @@ private:
 
             for(auto& [id, connection] : m_Clients)
             {
-                for(auto& [sequence, packet] : connection.resendBuffer)
+                for(auto& [sequence, packet] : connection.reliability.resendBuffer)
                 {                    
                     if(now - packet.lastSent >= 32ms)
                     {
@@ -828,6 +826,8 @@ public:
             m_Socket.bind(udp::endpoint(udp::v4(), 0));
             m_ServerAddress = remoteEndpoint;
 
+            m_Server.endpoint = remoteEndpoint;
+
             std::println("Client created at {}:{}", m_Socket.local_endpoint().address().to_string(), m_Socket.local_endpoint().port());
             ScheduleReceive();
             ScheduleJoinServer();
@@ -872,7 +872,8 @@ public:
 
         m_Socket.async_receive_from(asio::buffer(m_Buffer.Data(), m_Buffer.Capacity()), m_RemoteEndpoint, [this](std::error_code ec, std::size_t length)
         {
-            if(m_RemoteEndpoint != m_ServerAddress)
+            // if(m_RemoteEndpoint != m_ServerAddress)
+            if(m_RemoteEndpoint != m_Server.endpoint)
             {
                 std::println("Received message from {}:{} who is not the server.", m_RemoteEndpoint.address().to_string(), m_RemoteEndpoint.port());
 
@@ -924,7 +925,7 @@ public:
 
     void Send(std::shared_ptr<Networking::Buffer> buffer)
     {
-        m_Socket.async_send_to(asio::buffer(buffer->Data(), buffer->Size()), m_ServerAddress, [buffer](std::error_code ec, std::size_t length)
+        m_Socket.async_send_to(asio::buffer(buffer->Data(), buffer->Size()), m_Server.endpoint, [buffer](std::error_code ec, std::size_t length)
         {
             if(ec)
             {
@@ -1165,15 +1166,14 @@ private:
     asio::io_context m_Context;
     asio::ip::udp::socket m_Socket;
     std::thread m_NetworkThread;
+
+    UDPConnection m_Server;
     asio::ip::udp::endpoint m_ServerAddress;
     
     Handshake m_Handshake;
 
     PacketSequencer m_PacketSequencer;
 
-    // uint32_t m_SendSequence = 0;
-    // uint32_t m_LastServerSequence = 0;
-    // std::bitset<1024>  m_ReceivedPackets;
     ClientId m_ClientId = 0;
 
     // Used for receiving

@@ -40,13 +40,13 @@ FetchContent_Declare(glm
 FetchContent_MakeAvailable(glm)
 
 # Include STB_Image (and it's friends)
-FetchContent_Declare(stb
+FetchContent_Declare(stb_fetch
     GIT_REPOSITORY https://github.com/nothings/stb.git
 )
-FetchContent_MakeAvailable(stb)
+FetchContent_MakeAvailable(stb_fetch)
 
 add_library(stb INTERFACE)
-target_include_directories(stb INTERFACE ${stb_SOURCE_DIR})
+target_include_directories(stb INTERFACE ${stb_fetch_SOURCE_DIR})
 
 # Include asio
 FetchContent_Declare(asio_fetch
@@ -69,6 +69,7 @@ file(GLOB_RECURSE SourceFiles CONFIGURE_DEPENDS
 
 add_executable(Application ${SourceFiles})
 target_link_libraries(Application PRIVATE SDL3::SDL3 imgui stb glm::glm asio yaml-cpp::yaml-cpp)
+target_include_directories(Application PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 add_custom_command(TARGET Application POST_BUILD
    # Copy runtime deps

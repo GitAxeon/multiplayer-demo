@@ -14,9 +14,9 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
-#include "../include/CommandlineArguments.hpp"
-#include "../include/Keyboard.h"
-#include "../include/Networking.h"
+#include "CommandlineArguments.hpp"
+#include "Keyboard.h"
+#include "Networking.h"
 
 SDL_Texture* LoadTexture(SDL_Renderer* renderer, const std::string& path)
 {
