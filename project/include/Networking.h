@@ -1,5 +1,7 @@
 #pragma once
 
+#include "asio/error_code.hpp"
+#include "asio/io_context.hpp"
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -212,19 +214,135 @@ struct ReliabilityLayer
     std::unordered_map<uint32_t, ReliableMessage> resendBuffer;
 };
 
+struct UDPTransport
+{
+    asio::ip::udp::socket m_Socket;
+    
+    UDPTransport(asio::io_context& context)
+        : m_Socket(context)
+    {}
+
+    UDPTransport(asio::ip::udp::endpoint endpoint, asio::io_context& context)
+        : m_Socket(context, endpoint)
+    {}
+
+    // No-copyable
+    UDPTransport(const UDPTransport&) = delete;
+    UDPTransport& operator=(const UDPTransport&) = delete;
+
+    // Movable (thought it was spelled moveable)
+    UDPTransport(UDPTransport&&) = default;
+    UDPTransport& operator=(UDPTransport&&) = default;
+
+    bool Bind(const asio::ip::udp::endpoint& endpoint)
+    {
+        if(m_Socket.is_open())
+        {
+            asio::error_code closeError;
+            m_Socket.close(closeError);
+
+            if(closeError)
+            {
+                std::println("Failed to close socket cleanly: {}", closeError.message());
+            }
+        }
+
+        asio::error_code openError;
+        m_Socket.open(endpoint.protocol(), openError);
+        
+        if(openError)
+        {
+            std::println("Failed to open socket: {}", openError.message());
+            return false;
+        }
+
+        asio::error_code bindError;
+        m_Socket.bind(endpoint, bindError);
+
+        if(bindError)
+        {
+            std::println("Failed to bind socket: {}", bindError.message());
+            return false;
+        }
+
+        return true;
+    }
+
+    void Send(std::shared_ptr<Buffer> buffer, asio::ip::udp::endpoint endpoint)
+    {
+        m_Socket.async_send_to(asio::buffer(buffer->Data(), buffer->Size()), endpoint, [buffer, endpoint](std::error_code ec, std::size_t length)
+        {
+            if(ec)
+            {
+                std::println
+                (
+                    "Send failed for {}:{}: {}",
+                    endpoint.address().to_string(),
+                    endpoint.port(),
+                    ec.message()
+                );
+            } 
+        });
+    }
+};
+
 struct UDPConnection
 {
     using Clock = std::chrono::steady_clock;
 
-    Clock::time_point lastMessageTime;
+    UDPTransport& m_Transport;
     asio::ip::udp::endpoint endpoint;
     
     PacketSequencer sequencer;
     ReliabilityLayer reliability;
 
+    Clock::time_point lastMessageTime;
+
+    UDPConnection(UDPTransport& transport, const asio::ip::udp::endpoint& endpoint)
+        : m_Transport(transport), endpoint(endpoint)
+    {}
+
+    UDPConnection(UDPTransport& transport)
+        : m_Transport(transport)
+    {}
+
     bool HandleIncoming(uint32_t remoteSequence, uint32_t acknowledge, uint32_t acknowledgeBits)
     {
         return reliability.HandleIncoming(remoteSequence, acknowledge, acknowledgeBits);
+    }
+
+    void Send(std::shared_ptr<Buffer> buffer)
+    {
+        m_Transport.Send(buffer, endpoint);
+        lastMessageTime = Clock::now();
+    }
+
+    void SendReliable(std::shared_ptr<Buffer> buffer)
+    {
+        reliability.resendBuffer.emplace
+        (
+            std::piecewise_construct,
+            std::forward_as_tuple(sequencer.CurrentSequence()),
+            std::forward_as_tuple(buffer, sequencer.CurrentSequence())
+        );
+
+        Send(buffer);
+        reliability.resendBuffer.at(sequencer.CurrentSequence()).lastSent = Clock::now();
+    }
+
+    void Resend(std::chrono::steady_clock::time_point now)
+    {
+        using namespace std::chrono_literals;
+
+        for(auto& [sequence, packet] : reliability.resendBuffer)
+        {                    
+            if(Clock::now() - packet.lastSent >= 32ms)
+            {
+                Send(packet.packet);
+                packet.lastSent = now;
+                packet.retries++;
+            }
+        }
     }
 };
 
@@ -265,7 +383,8 @@ inline void Deserialize(UDPHeader& header, Buffer& buffer)
 class UDPServer
 {
 public:
-    UDPServer() : m_Context(), m_Socket(m_Context), m_ChallengeTimer(m_Context), m_HeartbeatTimer(m_Context), m_ResendTimer(m_Context)
+    UDPServer()
+        : m_Context(), m_Socket(m_Context), m_Transport(m_Context), m_ChallengeTimer(m_Context), m_HeartbeatTimer(m_Context), m_ResendTimer(m_Context)
     {
         std::println("UDPServer created");
     }
@@ -292,6 +411,8 @@ public:
         {
             m_Socket.open(udp::v4());
             m_Socket.bind(udp::endpoint(udp::v4(), port));
+            
+            m_Transport.Bind(udp::endpoint(udp::v4(), port));
 
             std::println
             (
@@ -463,8 +584,14 @@ public:
             }
 
             m_PendingClients.erase(pendingClient);
+            m_Clients.emplace
+            (
+                std::piecewise_construct,
+                std::forward_as_tuple(m_MonotonicClientId),
+                std::forward_as_tuple(m_Transport)
+            );
 
-            m_Clients[m_MonotonicClientId] = UDPConnection();
+            // m_Clients[m_MonotonicClientId] = UDPConnection(m_Transport);
             m_Clients[m_MonotonicClientId].endpoint = endpoint;
             m_Clients[m_MonotonicClientId].lastMessageTime = UDPConnection::Clock::now();
 
@@ -556,14 +683,11 @@ public:
         };
 
         auto& connection = clientIterator->second;
-        // connection.resendBuffer[header.sequence] = msg;
-
-        // Send(id, packetWithHeader);
-        // connection.resendBuffer[header.sequence].lastSent = std::chrono::steady_clock::now();
 
         // new 
         connection.reliability.resendBuffer[header.sequence] = msg;
-        Send(id, packetWithHeader);
+        connection.SendReliable(packetWithHeader);
+        // Send(id, packetWithHeader);
         connection.reliability.resendBuffer[header.sequence].lastSent = std::chrono::steady_clock::now();
     }
 
@@ -598,7 +722,7 @@ private:
 
         Serialize(header, *buffer);
         buffer->Write(clientIterator->second.challenge);
-        
+
         Send(endpoint, buffer);
     }
 
@@ -618,7 +742,8 @@ private:
         Serialize(header, *buffer);
         buffer->Write(id);
         
-        Send(clientIterator->second.endpoint, buffer);        
+        clientIterator->second.Send(buffer);
+        // Send(clientIterator->second.endpoint, buffer);        
     }
 
     void Send(ClientId clientId, std::shared_ptr<Networking::Buffer> buffer, UDPFlag reliable = UDP_Unreliable)
@@ -630,8 +755,8 @@ private:
             std::println("Attempted to send message to an offline client with id {}", clientId);
             return;
         }
-        
-        Send(clientIterator->second.endpoint, buffer);
+        clientIterator->second.Send(buffer);
+        // Send(clientIterator->second.endpoint, buffer);
     }
 
     void Send(asio::ip::udp::endpoint endpoint, std::shared_ptr<Networking::Buffer> buffer)
@@ -715,22 +840,13 @@ private:
         m_ResendTimer.async_wait([&](std::error_code ec)
         {
             if(ec == asio::error::operation_aborted)
-                return; // Timer cancelled apparently
+                return; // Timer cancelled apparently >:(
 
             auto now = std::chrono::steady_clock::now();
 
             for(auto& [id, connection] : m_Clients)
             {
-                for(auto& [sequence, packet] : connection.reliability.resendBuffer)
-                {                    
-                    if(now - packet.lastSent >= 32ms)
-                    {
-                        Send(id, packet.packet);
-                        packet.lastSent = now;
-                        packet.retries++;
-                    }
-                }
-                
+                connection.Resend(now);
                 // if(now - connection.lastMessageTime > 1s) disconnect
             }
 
@@ -738,44 +854,10 @@ private:
         });
     }
 
-    // void UpdateResendBuffer(ClientId id, uint32_t remoteSequence, uint32_t acknowledgeBits)
-    // {
-    //     auto& connection = m_Clients[id];
-        
-    //     for(auto it = connection.resendBuffer.begin(); it != connection.resendBuffer.end();)
-    //     {
-    //         uint32_t sequence = it->first;
-
-    //         bool acknowledged = false;
-
-    //         if(sequence == remoteSequence)
-    //         {
-    //             acknowledged = true;
-    //         }
-    //         else if(PacketSequencer::IsSequenceNewer(remoteSequence, sequence))
-    //         {
-    //             uint32_t diff = remoteSequence - sequence;
-
-    //             if(diff <= 32 && (acknowledgeBits & (1u << diff - 1)) )
-    //             {
-    //                 acknowledged = true;
-    //             }
-    //         }
-
-    //         if(acknowledged)
-    //         {
-    //             it = connection.resendBuffer.erase(it);
-    //         }
-    //         else
-    //         {
-    //             it++;
-    //         }
-    //     }
-    // }
-
 private:
     asio::io_context m_Context;
     asio::ip::udp::socket m_Socket;
+    UDPTransport m_Transport;
     std::thread m_NetworkThread;
 
     asio::steady_timer m_ChallengeTimer;
