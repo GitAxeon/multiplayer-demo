@@ -242,6 +242,11 @@ struct UDPTransport
     UDPTransport(UDPTransport&&) = default;
     UDPTransport& operator=(UDPTransport&&) = default;
 
+    asio::ip::udp::endpoint LocalEndpoint()
+    {
+        return m_Socket.local_endpoint();
+    }
+
     void SetReceiveCallback(ReceiveCallback callback)
     {
         m_ReceiveCallback = callback;
@@ -452,22 +457,16 @@ public:
         }
 
         try
-        {
-            m_Socket.open(udp::v4());
-            m_Socket.bind(udp::endpoint(udp::v4(), port));
-            
+        {            
             m_Transport.Bind(udp::endpoint(udp::v4(), port));
 
             std::println
             (
                 "Server starting at {}:{}",
-                m_Socket.local_endpoint().address().to_string(),
-                m_Socket.local_endpoint().port()
+                m_Transport.LocalEndpoint().address().to_string(),
+                m_Transport.LocalEndpoint().port()
             );
 
-            m_Buffer.Clear();
-
-            ScheduleReceive();
             ScheduleChallengeCheck();
             ScheduleHeartbeat();
             ScheduleResend();
@@ -508,10 +507,6 @@ public:
         if((header.flags & UDP_Reliable) && header.clientId != 0 && m_Clients.find(header.clientId) != m_Clients.end())
         {
             auto clientIt = m_Clients.find(header.clientId);
-
-            // clientIt->second.sequencer.RecordIncomingSequence(header.sequence);
-            // UpdateResendBuffer(clientIt->first, header.sequence, header.acknowledgeBits);
-
             bool isNew = clientIt->second.HandleIncoming(header.sequence, header.acknowledged, header.acknowledgeBits);
             
             if(!isNew)
@@ -653,184 +648,15 @@ public:
         if(m_NetworkThread.joinable())
             m_NetworkThread.join();
         
-        m_Socket.close();
-        
         std::println("UDPServer stopped");
     }
 
-    void ScheduleReceive()
-    {
-        m_Buffer.Clear();
-
-        m_Socket.async_receive_from(asio::buffer(m_Buffer.Data(), m_Buffer.Capacity()), m_RemoteEndpoint, [this](std::error_code ec, std::size_t length)
-        {
-            if(!ec)
-            {
-                HandleDatagram(m_RemoteEndpoint);
-            }
-            else
-            {
-                std::println("Error: async_receive_from: {}", ec.message());
-            }
-
-            ScheduleReceive();
-        });
-    }
-
-    void HandleDatagram(const asio::ip::udp::endpoint& endpoint)
-    { 
-        UDPHeader header;
-        Deserialize(header, m_Buffer);
-
-        if(header.protocol != sProtocol)
-        {
-            std::println("Protocol mismatch in message header");
-            return;
-        }
-
-        if((header.flags & UDP_Reliable) && header.clientId != 0 && m_Clients.find(header.clientId) != m_Clients.end())
-        {
-            auto clientIt = m_Clients.find(header.clientId);
-
-            // clientIt->second.sequencer.RecordIncomingSequence(header.sequence);
-            // UpdateResendBuffer(clientIt->first, header.sequence, header.acknowledgeBits);
-
-            bool isNew = clientIt->second.HandleIncoming(header.sequence, header.acknowledged, header.acknowledgeBits);
-            
-            if(!isNew)
-                return;
-        }
-
-        switch(header.messageType)
-        {
-        case MessageType::CONNECTION_REQUEST:
-        {
-            auto clientIterator = m_PendingClients.find(endpoint);
-
-            if(clientIterator == m_PendingClients.end())
-            {
-                std::println("Received connection request from {}:{}", endpoint.address().to_string(), endpoint.port());
-                
-                /* Todo: Random generate */
-                const uint32_t challenge = 123456;
-
-                m_PendingClients[endpoint] = PendingClient
-                {
-                    .endpoint = endpoint,
-                    .challenge = challenge,
-                    .lastMessageTime = PendingClient::Clock::now()
-                };
-                
-                SendChallenge(endpoint);
-            }
-            else
-            {
-                std::println("Ignoring duplicate connection request from {}:{}", endpoint.address().to_string(), endpoint.port());
-            }
-
-        } break;
-        case MessageType::CHALLENGE: { return; } break;
-        case MessageType::CHALLENGE_RESPONSE:
-        {
-            uint32_t challenge = 0;
-            m_Buffer.Read(challenge);
-
-            std::println("Challenge response received from {}:{}: {}", endpoint.address().to_string(), endpoint.port(), challenge);
-
-            auto pendingClient = m_PendingClients.find(endpoint);
-            
-            if(pendingClient == m_PendingClients.end())
-            {
-                // If connection has already been upgraded
-                ClientId id = 0;
-                m_Buffer.Read(id);
-
-                if(id && m_Clients.find(id) != m_Clients.end())
-                {
-                    SendWelcome(id);
-                }
-                else
-                {
-                    std::println
-                    (
-                        "Unexpectedly received challenge response from unknown client: {}:{}",
-                        endpoint.address().to_string(),
-                        endpoint.port()
-                    );
-                }
-
-                return;
-            }
-
-            if(challenge != pendingClient->second.challenge)
-            {
-                std::println
-                (
-                    "Challenge response didn't match expected value. Expected {} but received {} instead. Pending connection dropped in response.",
-                    pendingClient->second.challenge, 
-                    challenge
-                );
-
-                m_PendingClients.erase(pendingClient);
-
-                return;
-            }
-
-            m_PendingClients.erase(pendingClient);
-            m_Clients.emplace
-            (
-                std::piecewise_construct,
-                std::forward_as_tuple(m_MonotonicClientId),
-                std::forward_as_tuple(m_Transport)
-            );
-
-            // m_Clients[m_MonotonicClientId] = UDPConnection(m_Transport);
-            m_Clients[m_MonotonicClientId].endpoint = endpoint;
-            m_Clients[m_MonotonicClientId].lastMessageTime = UDPConnection::Clock::now();
-
-            std::println("Upgraded {} from pending connection", m_MonotonicClientId);
-
-            SendWelcome(m_MonotonicClientId);
-
-            m_MonotonicClientId++;
-
-        } break;
-        case MessageType::MESSAGE:
-        {
-            std::string message;
-            m_Buffer.Read(message);
-
-            std::println
-            (
-                "[{}] Received {} bytes from {}:{}: {}",
-                header.timestamp,
-                m_Buffer.Size(),
-                endpoint.address().to_string(),
-                endpoint.port(),
-                message
-            );
-        } break;
-        case MessageType::DISCONNECT:
-        {
-            if(header.clientId == 0)
-                return;
-
-            auto clientIterator = m_Clients.find(header.clientId);
-            
-            if(clientIterator == m_Clients.end())
-                return;
-            
-            std::println("Disconnect received from {}", header.clientId);
-            m_Clients.erase(clientIterator);
-        } break;
-        }
-    }
-
-    void Broadcast(const std::string& message, UDPFlag reliability = UDP_Unreliable)
+    void Broadcast(const std::string& message, bool reliable = false)
     {
         UDPHeader header;
-        header.timestamp = TimeAsMilliseconds();
         header.messageType = MessageType::MESSAGE;
+        header.flags = !reliable ? UDP_Unreliable  : UDP_Reliable;
+        header.timestamp = TimeAsMilliseconds();
 
         for(auto& [id, client] : m_Clients)
         {
@@ -843,8 +669,15 @@ public:
 
             Serialize(header, *buffer);
             buffer->Write(message);
-        
-            Send(id, buffer);
+
+            if(!reliable)
+            {
+                client.Send(buffer);
+            }
+            else
+            {
+                client.SendReliable(buffer);
+            }
         }
     }
 
@@ -884,21 +717,6 @@ public:
         connection.reliability.resendBuffer[header.sequence].lastSent = std::chrono::steady_clock::now();
     }
 
-    // bool PollMessage(UDPMessage& message)
-    // {
-    //     if(m_IncomingMessages.empty())
-    //         return false;
-        
-    //     m_IncomingMessageMutex.lock(); 
-            
-    //     message = *m_IncomingMessages.begin();
-    //     m_IncomingMessages.erase(m_IncomingMessages.begin());
-        
-    //     m_IncomingMessageMutex.unlock();
-
-    //     return true; 
-    // }
-
 private:
     void SendChallenge(asio::ip::udp::endpoint endpoint)
     {
@@ -916,7 +734,7 @@ private:
         Serialize(header, *buffer);
         buffer->Write(clientIterator->second.challenge);
 
-        Send(endpoint, buffer);
+        m_Transport.Send(buffer, endpoint);
     }
 
     void SendWelcome(ClientId id)
@@ -935,8 +753,7 @@ private:
         Serialize(header, *buffer);
         buffer->Write(id);
         
-        clientIterator->second.Send(buffer);
-        // Send(clientIterator->second.endpoint, buffer);        
+        clientIterator->second.Send(buffer); 
     }
 
     void Send(ClientId clientId, std::shared_ptr<Networking::Buffer> buffer, UDPFlag reliable = UDP_Unreliable)
@@ -950,23 +767,6 @@ private:
         }
         clientIterator->second.Send(buffer);
         // Send(clientIterator->second.endpoint, buffer);
-    }
-
-    void Send(asio::ip::udp::endpoint endpoint, std::shared_ptr<Networking::Buffer> buffer)
-    {
-        m_Socket.async_send_to(asio::buffer(buffer->Data(), buffer->Size()), endpoint, [buffer, endpoint](std::error_code ec, std::size_t length)
-        {
-            if(ec)
-            {
-                std::println
-                (
-                    "Send failed for {}:{}: {}",
-                    endpoint.address().to_string(),
-                    endpoint.port(),
-                    ec.message()
-                );
-            }
-        });
     }
 
     void ScheduleChallengeCheck()
@@ -1049,24 +849,17 @@ private:
 
 private:
     asio::io_context m_Context;
-    asio::ip::udp::socket m_Socket;
+
     UDPTransport m_Transport;
     std::thread m_NetworkThread;
 
-    asio::steady_timer m_ChallengeTimer;
     std::unordered_map<asio::ip::udp::endpoint, PendingClient> m_PendingClients;
     std::unordered_map<ClientId, UDPConnection> m_Clients;
     ClientId m_MonotonicClientId = 1;
 
+    asio::steady_timer m_ChallengeTimer;
     asio::steady_timer m_HeartbeatTimer;
     asio::steady_timer m_ResendTimer;
-
-    std::mutex m_IncomingMessageMutex;
-    // std::vector<UDPMessage> m_IncomingMessages;
-    
-    // Used when receiving data. Only one receive happens at a time so no need for multiples
-    asio::ip::udp::endpoint m_RemoteEndpoint;
-    Buffer m_Buffer{512};
 };
 
 class UDPClient
