@@ -428,7 +428,7 @@ class UDPServer
 {
 public:
     UDPServer()
-        : m_Context(), m_Socket(m_Context), m_Transport(m_Context), m_ChallengeTimer(m_Context), m_HeartbeatTimer(m_Context), m_ResendTimer(m_Context)
+        : m_Context(), m_Transport(m_Context), m_ChallengeTimer(m_Context), m_HeartbeatTimer(m_Context), m_ResendTimer(m_Context)
     {
         std::println("UDPServer created");
 
@@ -477,6 +477,7 @@ public:
                 {
                     std::println("Network thread started");
                     m_Context.run();
+                    std::println("Network thread stopped");
                 }
                 catch(std::exception& e)
                 {
@@ -746,6 +747,9 @@ private:
 
         UDPHeader header;
         header.messageType = MessageType::WELCOME;
+        header.sequence = clientIterator->second.sequencer.ObtainNewSequence();
+        header.acknowledged = clientIterator->second.sequencer.RemoteSequence();
+        header.acknowledgeBits = clientIterator->second.sequencer.AcknowledgeBits();
         header.timestamp = TimeAsMilliseconds();
 
         auto buffer = std::make_shared<Networking::Buffer>(sizeof(UDPHeader) + sizeof(ClientId));
@@ -753,20 +757,7 @@ private:
         Serialize(header, *buffer);
         buffer->Write(id);
         
-        clientIterator->second.Send(buffer); 
-    }
-
-    void Send(ClientId clientId, std::shared_ptr<Networking::Buffer> buffer, UDPFlag reliable = UDP_Unreliable)
-    {
-        auto clientIterator = m_Clients.find(clientId);
-
-        if(clientIterator == m_Clients.end())
-        {
-            std::println("Attempted to send message to an offline client with id {}", clientId);
-            return;
-        }
-        clientIterator->second.Send(buffer);
-        // Send(clientIterator->second.endpoint, buffer);
+        clientIterator->second.SendReliable(buffer); 
     }
 
     void ScheduleChallengeCheck()
@@ -781,7 +772,7 @@ private:
                 UpdatePendingClients();
             }
             else
-             {
+            {
                 std::println("Error: steady_timer.async_wait: {}", ec.message());
             }
 
@@ -865,9 +856,14 @@ private:
 class UDPClient
 {
 public:
-    UDPClient() : m_Context(), m_Socket(m_Context), m_Handshake(m_Context)
+    UDPClient() : m_Context(), m_Transport(m_Context), m_Server(m_Transport), m_Handshake(m_Context)
     {
         std::println("UDPClient constructed.");
+
+        m_Transport.SetReceiveCallback([this](auto& from, auto& data)
+        {
+            OnReceiveData(from, data);
+        });
     }
     
     ~UDPClient()
@@ -890,13 +886,11 @@ public:
 
         try
         {
-            m_Socket.open(udp::v4());
-            m_Socket.bind(udp::endpoint(udp::v4(), 0));
-            m_ServerAddress = remoteEndpoint;
-
+            m_Transport.Bind(udp::endpoint(udp::v4(), 0));
             m_Server.endpoint = remoteEndpoint;
 
-            std::println("Client created at {}:{}", m_Socket.local_endpoint().address().to_string(), m_Socket.local_endpoint().port());
+            std::println("Client created at {}:{}", m_Transport.LocalEndpoint().address().to_string(), m_Transport.LocalEndpoint().port());
+
             ScheduleReceive();
             ScheduleJoinServer();
 
@@ -928,8 +922,6 @@ public:
         
         if(m_NetworkThread.joinable())
             m_NetworkThread.join();
-        
-        m_Socket.close();
         
         std::println("UDPClient disconnected.");
     }
@@ -1249,21 +1241,16 @@ private:
 
 private:
     asio::io_context m_Context;
-    asio::ip::udp::socket m_Socket;
     std::thread m_NetworkThread;
-
+    
+    UDPTransport m_Transport;
     UDPConnection m_Server;
+
     asio::ip::udp::endpoint m_ServerAddress;
     
     Handshake m_Handshake;
 
-    PacketSequencer m_PacketSequencer;
-
     ClientId m_ClientId = 0;
-
-    // Used for receiving
-    asio::ip::udp::endpoint m_RemoteEndpoint;
-    Buffer m_Buffer{512};
 };
 
 }
