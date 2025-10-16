@@ -856,7 +856,7 @@ private:
 class UDPClient
 {
 public:
-    UDPClient() : m_Context(), m_Transport(m_Context), m_Server(m_Transport), m_Handshake(m_Context)
+    UDPClient() : m_Context(), m_Transport(m_Context), m_Connection(m_Transport), m_Handshake(m_Context)
     {
         std::println("UDPClient constructed.");
 
@@ -887,11 +887,10 @@ public:
         try
         {
             m_Transport.Bind(udp::endpoint(udp::v4(), 0));
-            m_Server.endpoint = remoteEndpoint;
+            m_Connection.endpoint = remoteEndpoint;
 
             std::println("Client created at {}:{}", m_Transport.LocalEndpoint().address().to_string(), m_Transport.LocalEndpoint().port());
 
-            ScheduleReceive();
             ScheduleJoinServer();
 
             m_NetworkThread = std::thread([this]()
@@ -926,34 +925,6 @@ public:
         std::println("UDPClient disconnected.");
     }
 
-    void ScheduleReceive()
-    {
-        m_Buffer.Clear();
-
-        m_Socket.async_receive_from(asio::buffer(m_Buffer.Data(), m_Buffer.Capacity()), m_RemoteEndpoint, [this](std::error_code ec, std::size_t length)
-        {
-            // if(m_RemoteEndpoint != m_ServerAddress)
-            if(m_RemoteEndpoint != m_Server.endpoint)
-            {
-                std::println("Received message from {}:{} who is not the server.", m_RemoteEndpoint.address().to_string(), m_RemoteEndpoint.port());
-
-                ScheduleReceive();
-                return;
-            }
-
-            if(!ec)
-            {
-                HandleDatagram();
-            }
-            else
-            {
-                std::println("Error: async_receive_from: {}", ec.message());
-            }
-
-            ScheduleReceive();
-        });        
-    }
-
     bool Send(const std::string& message, bool reliable = false)
     {
         std::println("Attempting to send data to server.");
@@ -962,9 +933,9 @@ public:
         {
             UDPHeader header;
             header.flags = !reliable ? UDP_Unreliable : UDP_Reliable;
-            header.sequence = m_PacketSequencer.ObtainNewSequence();
-            header.acknowledged = m_Server.reliability.sequencer.RemoteSequence();
-            header.acknowledgeBits = m_Server.reliability.sequencer.AcknowledgeBits();
+            header.sequence = m_Connection.reliability.sequencer.ObtainNewSequence();
+            header.acknowledged = m_Connection.reliability.sequencer.RemoteSequence();
+            header.acknowledgeBits = m_Connection.reliability.sequencer.AcknowledgeBits();
             header.timestamp = TimeAsMilliseconds();
 
             header.clientId = m_ClientId;
@@ -977,18 +948,18 @@ public:
 
             if(reliable)
             {
-                m_Server.reliability.resendBuffer[header.sequence] = ReliableMessage
+                m_Connection.reliability.resendBuffer[header.sequence] = ReliableMessage
                 {
                     newBuffer,
                     header.sequence
                 };
             }
 
-            Send(newBuffer);
+            m_Connection.Send(newBuffer);
 
             if(reliable)
             {
-                m_Server.reliability.resendBuffer[header.sequence].lastSent = UDPConnection::Clock::now();
+                m_Connection.reliability.resendBuffer[header.sequence].lastSent = UDPConnection::Clock::now();
             }
 
             return true;
@@ -1002,20 +973,14 @@ public:
 
     void Send(std::shared_ptr<Networking::Buffer> buffer)
     {
-        m_Socket.async_send_to(asio::buffer(buffer->Data(), buffer->Size()), m_Server.endpoint, [buffer](std::error_code ec, std::size_t length)
-        {
-            if(ec)
-            {
-                std::println("[Error] async_send_to: {}", ec.message());
-            }
-        });
+        m_Connection.Send(buffer);
     }
 
 private:
-    void HandleDatagram()
+    void OnReceiveData(const asio::ip::udp::endpoint& server, Buffer& data)
     {
         UDPHeader header;
-        Deserialize(header, m_Buffer);
+        Deserialize(header, data);
 
         switch(header.messageType)
         {
@@ -1027,7 +992,7 @@ private:
                 return;
             }
 
-            m_Buffer.Read(m_Handshake.serverChallenge);
+            data.Read(m_Handshake.serverChallenge);
             std::println("Challenge received from server: {}.", m_Handshake.serverChallenge);
 
             m_Handshake.Advance(Handshake::State::ReceivedChallenge);
@@ -1046,14 +1011,14 @@ private:
                 m_Handshake.Advance(Handshake::State::ReceivedWelcome); 
                 m_Handshake.lastMessageTime = std::chrono::steady_clock::now();
                 
-                m_Buffer.Read(m_ClientId);
+                data.Read(m_ClientId);
             }
 
         } break;
         case MessageType::MESSAGE:
         {
             std::string message;
-            m_Buffer.Read(message);
+            data.Read(message);
             
             std::println
             (
@@ -1077,7 +1042,7 @@ private:
         auto buffer = std::make_shared<Networking::Buffer>(sizeof(UDPHeader));
 
         Serialize(header, *buffer);
-        Send(buffer);
+        m_Connection.Send(buffer);
     }
 
     void SendChallengeResponse()
@@ -1091,7 +1056,7 @@ private:
         Serialize(header, *buffer);
         buffer->Write(m_Handshake.serverChallenge);
 
-        Send(buffer);        
+        m_Connection.Send(buffer);
     }
     
     void ScheduleJoinServer()
@@ -1244,9 +1209,7 @@ private:
     std::thread m_NetworkThread;
     
     UDPTransport m_Transport;
-    UDPConnection m_Server;
-
-    asio::ip::udp::endpoint m_ServerAddress;
+    UDPConnection m_Connection;
     
     Handshake m_Handshake;
 
