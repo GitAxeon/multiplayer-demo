@@ -691,8 +691,8 @@ public:
 
         UDPHeader header;
         header.clientId = id;
-        header.flags = UDP_Reliable;
         header.messageType = MessageType::MESSAGE;
+        header.flags = UDP_Reliable;
         header.sequence = clientIterator->second.sequencer.ObtainNewSequence();
         header.acknowledged = clientIterator->second.sequencer.RemoteSequence();
         header.acknowledgeBits = clientIterator->second.sequencer.AcknowledgeBits();
@@ -703,19 +703,7 @@ public:
         Serialize(header, *packetWithHeader);
         packetWithHeader->CopyFrom(*packet);
 
-        ReliableMessage msg
-        {
-            packetWithHeader,
-            header.sequence
-        };
-
-        auto& connection = clientIterator->second;
-
-        // new 
-        connection.reliability.resendBuffer[header.sequence] = msg;
-        connection.SendReliable(packetWithHeader);
-        // Send(id, packetWithHeader);
-        connection.reliability.resendBuffer[header.sequence].lastSent = std::chrono::steady_clock::now();
+        clientIterator->second.SendReliable(packetWithHeader);
     }
 
 private:
@@ -815,7 +803,7 @@ private:
             ScheduleHeartbeat();
         });
     }
-
+    
     void ScheduleResend()
     {
         using namespace std::chrono_literals;
