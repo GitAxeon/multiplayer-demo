@@ -390,6 +390,111 @@ struct UDPConnection
     }
 };
 
+class Handshake
+{
+public:
+    Handshake(asio::io_context& io) : timer(io) {}
+
+    enum class State
+    {
+        Offline,
+        SentJoin,
+        ReceivedChallenge,
+        SentChallengeResponse,
+        ReceivedWelcome,
+        Online
+    };
+
+    void Advance(State newState)
+    {
+        switch(state)
+        {
+        case State::Offline:
+        {
+            if(newState == State::SentJoin)
+            {
+                state = State::SentJoin;
+                retries = 0;
+            }
+        } break;
+        case State::SentJoin:
+        {
+            if(newState == State::ReceivedChallenge)
+            {
+                state = State::ReceivedChallenge;
+            }
+            else if(newState == State::SentJoin)
+            {
+                retries++;
+            }
+
+        } break;
+        case State::ReceivedChallenge:
+        {
+            if(newState == State::SentChallengeResponse)
+            {
+                state = State::SentChallengeResponse;
+                retries = 0;
+            }
+        } break;
+        case State::SentChallengeResponse:
+        {
+            if(newState == State::ReceivedWelcome)
+            {
+                state = State::ReceivedWelcome;
+                retries = 0;
+            }
+            else if(newState == State::SentChallengeResponse)
+            {
+                retries++;
+            }
+        } break;
+        }
+    }
+
+    void Abort()
+    {
+        state = State::Offline;
+        retries = 0;
+        serverChallenge = 0;
+        timer.cancel();
+    }
+    
+public:
+    State state = State::Offline;
+    uint32_t serverChallenge = 0;
+
+    std::chrono::steady_clock::time_point lastMessageTime;
+    int retries = 0;
+    asio::steady_timer timer;
+
+    int m_MaxRetries = 5;
+};
+
+class UDPAcceptor
+{
+public:
+    UDPAcceptor(asio::io_context& context)
+        : m_Context(context)
+    {}
+
+    // No copy
+    UDPAcceptor(const UDPAcceptor&) = delete;
+    UDPAcceptor& operator=(UDPAcceptor&) = delete;
+    
+    // Movable
+    UDPAcceptor(UDPAcceptor&&) = default;
+    UDPAcceptor& operator=(UDPAcceptor&&) = default;
+
+    UDPConnection Accept()
+    {
+        
+    }
+
+private:
+    asio::io_context& m_Context;
+};
+
 template<typename T>
 void Serialize(const T&, Buffer&)
 { 
@@ -590,6 +695,7 @@ public:
             }
 
             m_PendingClients.erase(pendingClient);
+            
             m_Clients.emplace
             (
                 std::piecewise_construct,
@@ -597,7 +703,6 @@ public:
                 std::forward_as_tuple(m_Transport)
             );
 
-            // m_Clients[m_MonotonicClientId] = UDPConnection(m_Transport);
             m_Clients[m_MonotonicClientId].endpoint = from;
             m_Clients[m_MonotonicClientId].lastMessageTime = UDPConnection::Clock::now();
 
@@ -689,14 +794,7 @@ public:
         if(clientIterator == m_Clients.end())
             return;
 
-        UDPHeader header;
-        header.clientId = id;
-        header.messageType = MessageType::MESSAGE;
-        header.flags = UDP_Reliable;
-        header.sequence = clientIterator->second.sequencer.ObtainNewSequence();
-        header.acknowledged = clientIterator->second.sequencer.RemoteSequence();
-        header.acknowledgeBits = clientIterator->second.sequencer.AcknowledgeBits();
-        header.timestamp = TimeAsMilliseconds();
+        UDPHeader header = CreateReliableHeader(id, clientIterator->second);
 
         auto packetWithHeader = std::make_shared<Networking::Buffer>(sizeof(UDPHeader) + packet->Size());
         
@@ -733,12 +831,7 @@ private:
         if(clientIterator == m_Clients.end())
             return;
 
-        UDPHeader header;
-        header.messageType = MessageType::WELCOME;
-        header.sequence = clientIterator->second.sequencer.ObtainNewSequence();
-        header.acknowledged = clientIterator->second.sequencer.RemoteSequence();
-        header.acknowledgeBits = clientIterator->second.sequencer.AcknowledgeBits();
-        header.timestamp = TimeAsMilliseconds();
+        UDPHeader header = CreateReliableHeader(id, clientIterator->second);
 
         auto buffer = std::make_shared<Networking::Buffer>(sizeof(UDPHeader) + sizeof(ClientId));
 
@@ -824,6 +917,20 @@ private:
 
             ScheduleResend();
         });
+    }
+
+    UDPHeader CreateReliableHeader(ClientId id, UDPConnection& client)
+    {
+        UDPHeader header;
+        header.clientId = id;
+        header.messageType = MessageType::MESSAGE;
+        header.flags = UDP_Reliable;
+        header.sequence = client.sequencer.ObtainNewSequence();
+        header.acknowledged = client.sequencer.RemoteSequence();
+        header.acknowledgeBits = client.sequencer.AcknowledgeBits();
+        header.timestamp = TimeAsMilliseconds();
+
+        return header;
     }
 
 private:

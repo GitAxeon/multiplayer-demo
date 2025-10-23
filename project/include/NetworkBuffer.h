@@ -21,9 +21,11 @@ public:
 
     ~Buffer() = default;
     
+    // No implicit copies
     Buffer(const Buffer&) = delete;
     Buffer& operator=(const Buffer&) = delete;
 
+    // Movable
     Buffer(Buffer&&) = default;
     Buffer& operator=(Buffer&&) = default;
 
@@ -77,6 +79,10 @@ private:
     std::size_t m_Capacity {0};
     std::size_t m_Position {0};
 };
+
+/*
+    Since most platforms are little ending it would be no problem to have the network be little endian aswell
+*/
 
 // Free functions
 void CopyToNetworkOrder(const std::byte* source, std::byte* destination, std::size_t count)
