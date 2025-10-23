@@ -49,6 +49,12 @@ public:
     template<typename E> requires std::is_enum_v<E>
     void Read(E& e);
 
+    // template<typename T>
+    // void Read(T& to, std::size_t positionFrom);
+
+    // template<typename T>
+    // void Read(T& to, std::size_t positionFrom);
+
     std::byte* Data() const;
     std::size_t Size() const;
     std::size_t Capacity() const;
@@ -221,6 +227,5 @@ std::size_t Buffer::Capacity() const
 {
     return m_Capacity;
 }
-
 
 }
