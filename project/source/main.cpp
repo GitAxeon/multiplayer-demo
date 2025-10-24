@@ -15,8 +15,11 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include "CommandlineArguments.hpp"
-#include "Keyboard.h"
-#include "Networking.h"
+#include "Keyboard.hpp"
+#include "Networking/Networking.hpp"
+
+#include "Client.hpp"
+#include "Server.hpp"
 
 SDL_Texture* LoadTexture(SDL_Renderer* renderer, const std::string& path)
 {
@@ -119,8 +122,8 @@ int main(int argc, char* argv[])
         std::println("SDL_SetTextureScaleMode failed for renderTexture: {}", SDL_GetError());
     }
 
-    std::unique_ptr<Networking::UDPServer> server;
-    std::unique_ptr<Networking::UDPClient> client;
+    std::unique_ptr<Networking::Server> server;
+    std::unique_ptr<Networking::Client> client;
 
     enum class OnlineStatus { Offline, Client, Host };
 
@@ -280,7 +283,7 @@ int main(int argc, char* argv[])
                             if(ImGui::Button("Start server"))
                             {
                                 if(!server)
-                                    server = std::make_unique<Networking::UDPServer>();
+                                    server = std::make_unique<Networking::Server>();
 
                                 server->Start(hostPort);
                                 onlineStatus = OnlineStatus::Host;
@@ -296,7 +299,7 @@ int main(int argc, char* argv[])
                             if(ImGui::Button("Join server"))
                             {
                                 if(!client)
-                                    client = std::make_unique<Networking::UDPClient>();
+                                    client = std::make_unique<Networking::Client>();
                                     
                                 try
                                 {
