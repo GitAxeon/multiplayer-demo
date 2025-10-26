@@ -17,6 +17,7 @@ enum class MessageType : uint8_t
     CONNECTION_REQUEST,
     CHALLENGE,
     CHALLENGE_RESPONSE,
+    CONNECTION_ACCEPTED,
     WELCOME,
     MESSAGE,
     ACKNOWLEDGE,
@@ -24,8 +25,6 @@ enum class MessageType : uint8_t
 };
 
 inline static uint32_t sProtocol {88173283U};
-
-constexpr int MaxBytesPerPacket = 1400;
 
 using UDPFlag = uint8_t;
 

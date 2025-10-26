@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include <asio.hpp>
 
 #include "Transport.hpp"
@@ -7,7 +9,7 @@
 namespace Networking
 {
 
-    struct PendingClient
+struct PendingClient
 {
     using Clock = std::chrono::steady_clock;
 
@@ -22,6 +24,8 @@ namespace Networking
 class Acceptor
 {
 public:
+    using AcceptCallback = std::function<void(asio::error_code, Connection)>; 
+
     Acceptor(asio::io_context& context, Transport& transport)
         : m_Context(context), m_Transport(transport), m_ChallengeTimer(context)
     {}
@@ -34,10 +38,17 @@ public:
     Acceptor(Acceptor&&) = default;
     Acceptor& operator=(Acceptor&&) = default;
 
-    // asio::awaitable<Connection> Accept()
-    // {
-
-    // }
+    void Accept(AcceptCallback callback)
+    {
+        if(!m_AcceptedConnections.empty())
+        {
+            
+        }
+        else
+        {
+            m_AcceptCallback = callback;
+        }
+    }
     
     void OnReceiveData(const asio::ip::udp::endpoint& from, Buffer& buffer)
     {
@@ -55,6 +66,10 @@ public:
             case MessageType::CHALLENGE_RESPONSE:
             {
                 HandleChallengeResponse(from, buffer);
+            } break;
+            case MessageType::ACKNOWLEDGE:
+            {
+
             } break;
         }
     }
@@ -118,7 +133,12 @@ public:
             return;
         }
 
-        m_AcceptedConnections.emplace_back(connectionIterator->first);
+        // m_AcceptedConnections.emplace_back(connectionIterator->first);
+        auto& connection = m_AcceptedConnections.emplace_back
+        (
+            m_Transport,
+            connectionIterator->first
+        );
 
         m_PendingConnections.erase(connectionIterator);
     }
@@ -186,7 +206,7 @@ public:
 
         m_Transport.Send(buffer, endpoint);
     }
-
+    
     void SendWelcome(ClientId id)
     {
         // const auto clientIterator = m_Clients.find(id);
@@ -208,8 +228,10 @@ private:
     Transport& m_Transport;
 
     std::unordered_map<asio::ip::udp::endpoint, PendingClient> m_PendingConnections;
-    std::vector<asio::ip::udp::endpoint> m_AcceptedConnections;
+    std::vector<Connection> m_AcceptedConnections;
     asio::steady_timer m_ChallengeTimer;
+
+    AcceptCallback m_AcceptCallback;
 };
 
 }

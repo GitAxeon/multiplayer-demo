@@ -2,12 +2,18 @@
 
 #include <cstdint>
 
+#include "../Random.hpp"
+
 namespace Networking
 {
 
 class PacketSequencer
 {
 public:
+    PacketSequencer()
+        : m_SequenceNumber(Random::RandomInt<uint32_t>())
+    {}
+
     uint32_t CurrentSequence() const
     {
         return m_SequenceNumber;
