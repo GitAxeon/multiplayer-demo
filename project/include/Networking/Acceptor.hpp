@@ -16,7 +16,9 @@ struct PendingClient
     asio::ip::udp::endpoint endpoint;
     uint32_t challenge{0};
     Clock::time_point lastMessageTime;
-    
+    uint32_t sequence = 0;
+    uint32_t remoteSequence = 0;
+
     int retries = 5;
     int MaxRetries = 5;
 };
@@ -38,16 +40,9 @@ public:
     Acceptor(Acceptor&&) = default;
     Acceptor& operator=(Acceptor&&) = default;
 
-    void Accept(AcceptCallback callback)
+    void SetCallback(AcceptCallback callback)
     {
-        if(!m_AcceptedConnections.empty())
-        {
-            
-        }
-        else
-        {
-            m_AcceptCallback = callback;
-        }
+        m_AcceptCallback = callback;
     }
     
     void OnReceiveData(const asio::ip::udp::endpoint& from, Buffer& buffer)
@@ -78,16 +73,34 @@ public:
     {
         if(m_PendingConnections.find(from) == m_PendingConnections.end())
         {
+            buffer.Reset();
+            
+            Header header;
+            Deserialize(header, buffer);
+            
+            uint32_t remoteSequence = 0;
+            
+            try
+            {
+                buffer.Read(remoteSequence);
+            }
+            catch(const std::exception& e)
+            {
+                std::println("Buffer didn't contain sequence number. Dropping connection request.");
+                return;
+            }
+
             std::println("Received connection request from {}:{}", from.address().to_string(), from.port());
             
-            /* Todo: Random generate */
-            const uint32_t challenge = 123456;
+            const uint32_t challenge = Random::RandomInt<uint32_t>();
 
             m_PendingConnections[from] = PendingClient
             {
                 .endpoint = from,
                 .challenge = challenge,
-                .lastMessageTime = PendingClient::Clock::now()
+                .lastMessageTime = PendingClient::Clock::now(),
+                .sequence = Random::RandomInt<uint32_t>(),
+                .remoteSequence = remoteSequence
             };
             
             SendChallenge(from);
@@ -100,11 +113,6 @@ public:
 
     void HandleChallengeResponse(const asio::ip::udp::endpoint& from, Buffer& buffer)
     {
-        uint32_t challenge = 0;
-        buffer.Read(challenge);
-
-        std::println("Challenge response received from {}:{}: {}", from.address().to_string(), from.port(), challenge);
-
         auto connectionIterator = m_PendingConnections.find(from);
         
         if(connectionIterator == m_PendingConnections.end())
@@ -118,6 +126,15 @@ public:
 
             return;
         }
+
+        buffer.Reset();
+        Header header;
+        Deserialize(header, buffer);
+
+        uint32_t challenge = 0;
+        buffer.Read(challenge);
+
+        std::println("Challenge response received from {}:{}: {}", from.address().to_string(), from.port(), challenge);
 
         if(challenge != connectionIterator->second.challenge)
         {
@@ -133,12 +150,26 @@ public:
             return;
         }
 
-        // m_AcceptedConnections.emplace_back(connectionIterator->first);
-        auto& connection = m_AcceptedConnections.emplace_back
-        (
-            m_Transport,
-            connectionIterator->first
-        );
+        if(header.acknowledged != connectionIterator->second.sequence)
+        {
+            std::println
+            (
+                "Pending connections acknowledge field doesnt match expected value.\nAcknowledge: {}\nSequence: {}",
+                header.acknowledged,
+                connectionIterator->second.sequence
+            );
+
+            m_PendingConnections.erase(connectionIterator);
+            
+            return;
+        }
+        
+        auto connection = Connection(m_Transport, connectionIterator->first);
+        connection.reliability.sequencer.SetSequence(connectionIterator->second.sequence);
+        connection.reliability.sequencer.SetRemoteSequence(connectionIterator->second.remoteSequence);
+        // connection.SendReliable();
+
+        m_AcceptCallback({}, std::move(connection));
 
         m_PendingConnections.erase(connectionIterator);
     }
@@ -197,6 +228,7 @@ public:
 
         Header header;
         header.messageType = MessageType::CHALLENGE;
+        header.sequence = clientIterator->second.sequence;
         header.timestamp = TimeAsMilliseconds();
 
         auto buffer = std::make_shared<Networking::Buffer>(sizeof(Header) + sizeof(uint32_t));
@@ -228,7 +260,6 @@ private:
     Transport& m_Transport;
 
     std::unordered_map<asio::ip::udp::endpoint, PendingClient> m_PendingConnections;
-    std::vector<Connection> m_AcceptedConnections;
     asio::steady_timer m_ChallengeTimer;
 
     AcceptCallback m_AcceptCallback;

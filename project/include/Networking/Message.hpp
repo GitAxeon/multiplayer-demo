@@ -12,6 +12,14 @@ inline uint64_t TimeAsMilliseconds()
     return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
+/*
+
+Client->Server: CONNECTION_REQUEST
+Server->Client: CHALLENGE 
+Client->Server: CHALLENGE_RESPONSE
+
+*/
+
 enum class MessageType : uint8_t
 {
     CONNECTION_REQUEST,

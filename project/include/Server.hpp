@@ -21,6 +21,11 @@ public:
         {
             OnReceiveData(from, data);
         });
+
+        m_Acceptor.SetCallback([this](auto ec, auto connection)
+        {
+            std::println("New connection!");
+        });
     }
     
     ~Server()

@@ -10,9 +10,15 @@ namespace Networking
 class PacketSequencer
 {
 public:
-    PacketSequencer()
-        : m_SequenceNumber(Random::RandomInt<uint32_t>())
-    {}
+    void SetSequence(uint32_t value)
+    {
+        m_SequenceNumber = value;
+    }
+
+    void SetRemoteSequence(uint32_t value)
+    {
+        m_RemoteSequenceNumber = value;
+    }
 
     uint32_t CurrentSequence() const
     {
