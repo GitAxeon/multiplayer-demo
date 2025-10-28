@@ -20,6 +20,8 @@ public:
     explicit Buffer(std::size_t size);
 
     ~Buffer() = default;
+
+    static std::shared_ptr<Buffer> Create(std::size_t size);
     
     // No implicit copies
     Buffer(const Buffer&) = delete;
@@ -122,6 +124,11 @@ Buffer::Buffer(std::size_t size)
     : m_Data(std::make_unique<std::byte[]>(size)), m_Capacity(size)
 {
     Clear();
+}
+
+std::shared_ptr<Buffer> Buffer::Create(std::size_t size)
+{
+    return std::make_shared<Buffer>(size);
 }
 
 void Buffer::Clear()

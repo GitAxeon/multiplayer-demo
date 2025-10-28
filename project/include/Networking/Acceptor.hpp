@@ -164,10 +164,14 @@ public:
             return;
         }
         
+        connectionIterator->second.sequence += 1;
+        connectionIterator->second.remoteSequence += 1;
+        
         auto connection = Connection(m_Transport, connectionIterator->first);
         connection.reliability.sequencer.SetSequence(connectionIterator->second.sequence);
         connection.reliability.sequencer.SetRemoteSequence(connectionIterator->second.remoteSequence);
-        // connection.SendReliable();
+
+        SendConnectionAccepted(connection);
 
         m_AcceptCallback({}, std::move(connection));
 
@@ -231,7 +235,7 @@ public:
         header.sequence = clientIterator->second.sequence;
         header.timestamp = TimeAsMilliseconds();
 
-        auto buffer = std::make_shared<Networking::Buffer>(sizeof(Header) + sizeof(uint32_t));
+        auto buffer = Buffer::Create(sizeof(Header) + sizeof(uint32_t));
 
         Serialize(header, *buffer);
         buffer->Write(clientIterator->second.challenge);
@@ -239,22 +243,23 @@ public:
         m_Transport.Send(buffer, endpoint);
     }
     
-    void SendWelcome(ClientId id)
+    void SendConnectionAccepted(Connection& connection)
     {
-        // const auto clientIterator = m_Clients.find(id);
+        Header header;
+        header.messageType = MessageType::CONNECTION_ACCEPTED;
+        header.sequence = connection.reliability.sequencer.ObtainNewSequence();
+        header.acknowledged = connection.reliability.sequencer.RemoteSequence();
+        header.acknowledgeBits = connection.reliability.sequencer.AcknowledgeBits();
+        header.flags = UDP_Reliable;
+        header.timestamp = TimeAsMilliseconds();
         
-        // if(clientIterator == m_Clients.end())
-        //     return;
+        auto buffer = Buffer::Create(sizeof(Header));
 
-        // Header header = CreateReliableHeader(id, clientIterator->second);
-
-        // auto buffer = std::make_shared<Networking::Buffer>(sizeof(Header) + sizeof(ClientId));
-
-        // Serialize(header, *buffer);
-        // buffer->Write(id);
+        Serialize(header, *buffer);
         
-        // clientIterator->second.SendReliable(buffer); 
+        connection.SendReliable(buffer); 
     }
+
 private:
     asio::io_context& m_Context;
     Transport& m_Transport;

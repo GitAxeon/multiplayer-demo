@@ -182,7 +182,7 @@ public:
             header.acknowledged = client.sequencer.RemoteSequence();
             header.acknowledgeBits = client.sequencer.AcknowledgeBits();
             
-            auto buffer = std::make_shared<Networking::Buffer>(sizeof(Header) + sizeof(std::size_t) + message.length());
+            auto buffer = Buffer::Create(sizeof(Header) + sizeof(std::size_t) + message.length());
 
             Serialize(header, *buffer);
             buffer->Write(message);
@@ -207,7 +207,7 @@ public:
 
         Header header = CreateReliableHeader(id, clientIterator->second);
 
-        auto packetWithHeader = std::make_shared<Networking::Buffer>(sizeof(Header) + packet->Size());
+        auto packetWithHeader = Buffer::Create(sizeof(Header) + packet->Size());
         
         Serialize(header, *packetWithHeader);
         packetWithHeader->CopyFrom(*packet);
