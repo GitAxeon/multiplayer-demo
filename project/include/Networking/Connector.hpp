@@ -22,6 +22,8 @@ public:
     {
         m_Endpoint = endpoint;
         m_ConnectCallback = connectCallback;
+        
+        ScheduleJoinServer();
     }
 
     void OnReceiveData(const asio::ip::udp::endpoint& from, Buffer& data)
@@ -35,9 +37,9 @@ public:
         {
         case MessageType::CHALLENGE:
         {
-            if(m_Handshake.state != Handshake::State::SentJoin)
+            if(m_Handshake.GetState() != Handshake::State::SentJoin)
             {
-                std::println("Unexpectedly received challenge from Server. Ignoring packet. HandshakeState: {}", static_cast<uint32_t>(m_Handshake.state));
+                std::println("Unexpectedly received challenge from Server. Ignoring packet. HandshakeState: {}", static_cast<uint32_t>(m_Handshake.GetState()));
                 return;
             }
 
@@ -52,15 +54,13 @@ public:
 
             std::println("Sent challenge response");
         } break;
-        case MessageType::Connection_ACCEPTED:
+        case MessageType::CONNECTION_ACCEPTED:
         {
-            if(m_Handshake.state == Handshake::State::SentChallengeResponse)
+            if(m_Handshake.GetState() == Handshake::State::SentChallengeResponse)
             {
                 std::println("Connection established with server");
-                m_Handshake.Advance(Handshake::State::ReceivedWelcome); 
+                m_Handshake.Advance(Handshake::State::ConnectionAccepted); 
                 m_Handshake.lastMessageTime = std::chrono::steady_clock::now();
-                
-                data.Read(m_ClientId);
             }
 
         } break;
@@ -74,7 +74,7 @@ private:
         header.timestamp = TimeAsMilliseconds();
         header.messageType = MessageType::CONNECTION_REQUEST;
         
-        auto buffer = std::make_shared<Networking::Buffer>(sizeof(Header));
+        auto buffer = Buffer::Create(sizeof(Header));
 
         Serialize(header, *buffer);
         m_Transport.Send(buffer, m_Endpoint);
@@ -86,7 +86,7 @@ private:
         header.timestamp = TimeAsMilliseconds();
         header.messageType = MessageType::CHALLENGE_RESPONSE;
         
-        auto buffer = std::make_shared<Networking::Buffer>(sizeof(Header) + sizeof(Handshake::serverChallenge));
+        auto buffer = Buffer::Create(sizeof(Header) + sizeof(Handshake::serverChallenge));
 
         Serialize(header, *buffer);
         buffer->Write(m_Handshake.serverChallenge);
@@ -223,7 +223,7 @@ private:
 
         void Abort()
         {
-            state = State::Disconnected;
+            m_State = State::Disconnected;
             retries = 0;
             serverChallenge = 0;
             timer.cancel();
@@ -245,6 +245,7 @@ private:
     Transport& m_Transport;
     Handshake m_Handshake;
     asio::ip::udp::endpoint m_Endpoint;
+
     ConnectCallback m_ConnectCallback;
 };
 
