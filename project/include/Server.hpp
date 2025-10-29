@@ -61,7 +61,7 @@ public:
             ScheduleResend();
 
             m_NetworkThread = std::thread([this]()
-            { 
+            {
                 try
                 {
                     std::println("Network thread started");

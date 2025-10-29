@@ -126,6 +126,9 @@ public:
 
             return;
         }
+        
+        // This should be the second message from the client so I manually increment the sequence here
+        connectionIterator->second.remoteSequence += 1;
 
         buffer.Reset();
         Header header;
@@ -135,6 +138,34 @@ public:
         buffer.Read(challenge);
 
         std::println("Challenge response received from {}:{}: {}", from.address().to_string(), from.port(), challenge);
+
+        if(header.sequence != connectionIterator->second.remoteSequence)
+        {
+            std::println
+            (
+                "Remote sequence number didn't match expected value. Expected {} but received {} instead. Pending connection dropped in response",
+                connectionIterator->second.remoteSequence,
+                header.sequence
+            );
+
+            m_PendingConnections.erase(connectionIterator);
+            
+            return;
+        }
+
+        if(header.acknowledged != connectionIterator->second.sequence)
+        {
+            std::println
+            (
+                "Remote acknowledge number didn't match expected value. Expected {} but received {} instead. Pending connection dropped in response",
+                connectionIterator->second.sequence,
+                header.acknowledged
+            );
+            
+            m_PendingConnections.erase(connectionIterator);
+            
+            return;
+        }
 
         if(challenge != connectionIterator->second.challenge)
         {
@@ -163,9 +194,9 @@ public:
             
             return;
         }
-        
+
+        // Increment the local sequence for the next outgoing message
         connectionIterator->second.sequence += 1;
-        connectionIterator->second.remoteSequence += 1;
         
         auto connection = Connection(m_Transport, connectionIterator->first);
         connection.reliability.sequencer.SetSequence(connectionIterator->second.sequence);
