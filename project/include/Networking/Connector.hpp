@@ -6,8 +6,20 @@
 #include "Transport.hpp"
 #include "Connection.hpp"
 
+template<>
+struct std::formatter<asio::ip::udp::endpoint> : std::formatter<std::string_view>
+{
+    auto format(const asio::ip::udp::endpoint& endpoint, std::format_context& ctx) const
+    {
+        std::string temp;
+        std::format_to(std::back_inserter(temp), "{}:{}", endpoint.address().to_string(), endpoint.port());
+        return std::formatter<string_view>::format(temp, ctx);
+    }
+};
+
 namespace Networking
 {
+
 
 class Connector
 {
@@ -32,6 +44,12 @@ public:
 
         Header header;
         Deserialize(header, data);
+
+        if(from != m_Endpoint)
+        {
+            std::println("Message received from {} who isn't the server {}", from, m_Endpoint);
+            return;
+        }
 
         switch(header.messageType)
         {
@@ -68,6 +86,20 @@ public:
     }
 
 private:
+
+    void OnReceiveChallenge()
+    {
+
+    }
+
+    void JoinServer()
+    {
+        SendJoin();
+        m_Handshake.lastMessageTime = std::chrono::steady_clock::now();
+        m_Handshake.Advance(Handshake::State::SentJoin);
+
+    }
+
     void SendJoin()
     {
         Header header;
