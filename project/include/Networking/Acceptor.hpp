@@ -5,6 +5,7 @@
 #include <asio.hpp>
 
 #include "Transport.hpp"
+#include "Connection.hpp"
 
 namespace Networking
 {
