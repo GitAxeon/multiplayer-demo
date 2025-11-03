@@ -20,12 +20,16 @@ struct ReliableMessage
     int m_MaxRetries = 32;
 };
 
-struct ReliabilityLayer
+class ReliabilityLayer
 {
+public:
+
+    PacketSequencer& GetPacketSequencer() { return m_Sequencer; }
+    
     // Return true if the message hasn't been acknowledged before
     bool HandleIncoming(uint32_t remoteSequence, uint32_t acknowledge, uint32_t acknowledgeBits)
     {
-        bool isNew = sequencer.RecordIncomingSequence(remoteSequence);
+        bool isNew = m_Sequencer.RecordIncomingSequence(remoteSequence);
         
         if(!isNew)
             return false;
@@ -37,7 +41,7 @@ struct ReliabilityLayer
 
     void UpdateResendBuffer(uint32_t acknowledge, uint32_t acknowledgeBits)
     {
-        for(auto it = resendBuffer.begin(); it != resendBuffer.end();)
+        for(auto it = m_ResendBuffer.begin(); it != m_ResendBuffer.end();)
         {
             uint32_t sequence = it->first;
 
@@ -59,7 +63,7 @@ struct ReliabilityLayer
 
             if(acknowledged)
             {
-                it = resendBuffer.erase(it);
+                it = m_ResendBuffer.erase(it);
             }
             else
             {
@@ -67,9 +71,10 @@ struct ReliabilityLayer
             }
         }
     }
-    
-    PacketSequencer sequencer;
-    std::unordered_map<uint32_t, ReliableMessage> resendBuffer;
+
+private:
+    PacketSequencer m_Sequencer;
+    std::unordered_map<uint32_t, ReliableMessage> m_ResendBuffer;
 };
 
 }

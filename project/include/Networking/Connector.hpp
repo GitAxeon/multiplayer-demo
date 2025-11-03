@@ -24,10 +24,12 @@ public:
     void Connect(const asio::ip::udp::endpoint& endpoint, ConnectCallback connectCallback)
     {
         m_Endpoint = endpoint;
-        m_ConnectCallback = connectCallback;
+        m_ConnectCallback = std::move(connectCallback);
 
         SendConnectionRequest();
-        m_LastResend = std::chrono::steady_clock::now();
+        m_LastSend = std::chrono::steady_clock::now();
+        m_State = State::SentConnectionRequest;
+        m_ResendCount = 0;
 
         ScheduleResend();
     }
@@ -55,7 +57,7 @@ public:
         case MessageType::CONNECTION_ACCEPTED:
         {
             if(m_State == State::SentChallengeResponse)
-                ConnectionAccepted(data);
+                ConnectionAccepted();
         } break;
         }
     }
@@ -75,22 +77,21 @@ private:
 
         data.Read(m_ServerChallenge);
         std::println("Challenge received from server: {}.", m_ServerChallenge);
-
-        m_State = State::ReceivedChallenge;
         
         SendChallengeResponse();
         m_State = State::SentChallengeResponse;
-        m_LastResend = std::chrono::steady_clock::now();
+        m_LastSend = std::chrono::steady_clock::now();
+        m_ResendCount = 0;
 
         std::println("Sent challenge response");
     }
 
-    void ConnectionAccepted(Buffer& buffer)
+    void ConnectionAccepted()
     {
         std::println("Connection established with server");
 
-        m_State = State::ConnectionAccepted; 
-        m_LastResend = std::chrono::steady_clock::now();
+        m_State = State::Connected;
+        m_ConnectCallback({}, Connection(m_Transport, m_Endpoint));
     }
 
     void SendConnectionRequest()
@@ -114,7 +115,7 @@ private:
         auto buffer = Buffer::Create(sizeof(Header) + sizeof(m_ServerChallenge));
 
         Serialize(header, *buffer);
-        buffer->Write(m_Handshake.serverChallenge);
+        buffer->Write(m_ServerChallenge);
 
         m_Transport.Send(buffer, m_Endpoint);
     }
@@ -124,11 +125,12 @@ private:
         using namespace std::chrono_literals;
 
         m_ResendTimer.expires_after(100ms);
-        m_ResendTimer.async_wait([&](std::error_code ec)
+        m_ResendTimer.async_wait([this](std::error_code ec)
         {
             if(ec)
             {
                 std::println("[Error][HandShake]: steady_timer.async_wait: {}", ec.message());
+                m_State = State::Disconnected;
                 return;
             }
 
@@ -138,13 +140,14 @@ private:
                 return;
             }
 
-            if(m_RetryCount >= MaxRetries)
+            if(m_ResendCount >= MaxRetries)
             {
                 std::println("Connection attempt to {} timed out.", m_Endpoint);
+                m_State = State::Disconnected;
                 return;
             }
 
-            if(std::chrono::steady_clock::now() - m_LastResend < 200ms)
+            if(std::chrono::steady_clock::now() - m_LastSend < 200ms)
             {
                 ScheduleResend();
                 return;
@@ -152,17 +155,17 @@ private:
 
             switch(m_State)
             {
-            case State::Disconnected:
+            case State::SentConnectionRequest:
             {
                 SendConnectionRequest();
-                m_LastResend = std::chrono::steady_clock::now();
-                m_RetryCount++;
+                m_LastSend = std::chrono::steady_clock::now();
+                m_ResendCount++;
             } break;
-            case State::ReceivedChallenge:
+            case State::SentChallengeResponse:
             {
                 SendChallengeResponse();
-                m_LastResend = std::chrono::steady_clock::now();
-                m_RetryCount++;
+                m_LastSend = std::chrono::steady_clock::now();
+                m_ResendCount++;
             } break;
             }
             
@@ -175,9 +178,7 @@ private:
     { 
         Disconnected,
         SentConnectionRequest,
-        ReceivedChallenge,
         SentChallengeResponse,
-        ConnectionAccepted,
         Connected,
         Reconnecting
     };
@@ -190,11 +191,11 @@ private:
 
     State m_State = State::Disconnected;
     asio::steady_timer m_ResendTimer;
-    std::chrono::steady_clock::time_point m_LastResend;
+    std::chrono::steady_clock::time_point m_LastSend;
     uint32_t m_ServerChallenge = 0;
 
-    int m_RetryCount = 0;
-    int MaxRetries = 5;
+    int m_ResendCount = 0;
+    constexpr static int MaxRetries = 5;
 };
 
 }
