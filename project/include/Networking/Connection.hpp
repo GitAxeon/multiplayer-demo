@@ -24,9 +24,13 @@ public:
 
     Clock::time_point m_LastMessageTime;
 
-    Connection(Transport& transport, const asio::ip::udp::endpoint& endpoint)
+    Connection(Transport& transport, const asio::ip::udp::endpoint& endpoint, uint32_t sequence, uint32_t remoteSequence)
         : m_Transport(transport), m_Endpoint(endpoint)
-    {}
+    {
+        auto& sequencer = m_Reliability.GetPacketSequencer();
+        sequencer.SetSequence(sequence);
+        sequencer.SetRemoteSequence(remoteSequence);
+    }
 
     Connection(Transport& transport)
         : m_Transport(transport)
@@ -40,36 +44,58 @@ public:
         return m_Reliability.HandleIncoming(remoteSequence, acknowledge, acknowledgeBits);
     }
 
+    template<typename Handler>
+    void Send(std::shared_ptr<Buffer> buffer, Handler&& handler)
+    {
+        m_Transport.Send(buffer, m_Endpoint,
+        [this, callback = std::forward<Handle>(handler)](asio::error_code ec, std::size_t length))
+        {
+            callback(ec, length);
+        });
+    }
+    
     void Send(std::shared_ptr<Buffer> buffer)
     {
-        m_Transport.Send(buffer, m_Endpoint);
-        m_LastMessageTime = Clock::now();
+        m_Transport.Send(buffer, m_Endpoint,[this](asio::error_code ec, std::size_t length)
+        {
+            m_LastMessageTime = Clock::now();
+        });
     }
 
     void SendReliable(std::shared_ptr<Buffer> buffer)
     {
-        m_Reliability.resendBuffer.emplace
-        (
-            std::piecewise_construct,
-            std::forward_as_tuple(m_Reliability.GetPacketSequencer().CurrentSequence()),
-            std::forward_as_tuple(buffer, m_Sequencer.CurrentSequence())
-        );
+        auto result = m_Reliability.AddMessage(buffer);
 
-        Send(buffer);
-        m_Reliability.resendBuffer.at(m_Sequencer.CurrentSequence()).lastSent = Clock::now();
+        if(result)
+        {
+            Send(buffer, [this, sequence = result.value()](asio::error_code ec, std::size_t length)
+            {
+                m_Reliability.UpdateSendTime(sequence);
+                m_LastMessageTime = Clock::now();
+            });
+        }
     }
 
     void Resend(std::chrono::steady_clock::time_point now)
     {
         using namespace std::chrono_literals;
 
-        for(auto& [sequence, packet] : m_Reliability.resendBuffer)
-        {                    
-            if(Clock::now() - packet.lastSent >= 32ms)
+        for(auto& [sequence, packet] : m_Reliability.GetPendingResends())
+        {
+            if(now - packet.lastSent >= 32ms)
             {
-                Send(packet.packet);
-                packet.lastSent = now;
-                packet.retries++;
+                Send(packet.packet, [this, sequence](asio::error_code ec, std::size_t length)
+                {
+                    if(!ec)
+                    {
+                        m_Reliability.UpdateSendTime(sequence);
+                        m_Reliability.IncrementResendCount(sequence);
+                    }
+                    else
+                    {
+                        std::println("Error resending a reliable message: {}", ec.message());
+                    }
+                });
             }
         }
     }

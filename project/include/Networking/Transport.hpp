@@ -5,6 +5,7 @@
 
 #include <asio.hpp>
 
+#include "AsioFormat.hpp"
 #include "NetworkBuffer.hpp"
 
 namespace Networking
@@ -81,7 +82,7 @@ struct Transport
         return true;
     }
 
-    void Send(std::shared_ptr<Buffer> buffer, asio::ip::udp::endpoint endpoint)
+    void Send(std::shared_ptr<Buffer> buffer, const asio::ip::udp::endpoint& endpoint)
     {
         m_Socket.async_send_to(asio::buffer(buffer->Data(), buffer->Size()), endpoint, [buffer, endpoint](std::error_code ec, std::size_t length)
         {
@@ -89,12 +90,21 @@ struct Transport
             {
                 std::println
                 (
-                    "Send failed for {}:{}: {}",
-                    endpoint.address().to_string(),
-                    endpoint.port(),
+                    "Send failed for {}: {}",
+                    endpoint,
                     ec.message()
                 );
-            } 
+            }
+        });
+    }
+
+    template<typename Handler>
+    void Send(std::shared_ptr<Buffer> buffer, const asio::ip::udp::endpoint& endpoint, Handler&& handler)
+    {
+        m_Socket.async_send_to(asio::buffer(buffer->Data(), buffer->Size()), endpoint, 
+        [buffer, callback = std::forward<Handler>(handler)](std::error_code ec, std::size_t length)
+        {
+            callback(ec, length);
         });
     }
 
@@ -106,17 +116,16 @@ struct Transport
             m_RemoteEndpoint,
             [this](std::error_code error, std::size_t bytes)
             {
-                if(!error && bytes > 0)
+                if(error)
+                {
+                    if(error == asio::error::operation_aborted)
+                        return;
+                    else
+                        std::println("Error receiving data: {}", error.message());
+                }
+                else if(bytes > 0)
                 {
                     m_ReceiveCallback(m_RemoteEndpoint, m_ReceiveBuffer);
-                }
-                else if(error)
-                {
-                    std::println("Error receiving data: {}", error.message());
-                }
-                else
-                {
-                    // Zero bytes received so idk
                 }
 
                 ScheduleReceive();

@@ -26,10 +26,12 @@ public:
         m_Endpoint = endpoint;
         m_ConnectCallback = std::move(connectCallback);
 
-        SendConnectionRequest();
-        m_LastSend = std::chrono::steady_clock::now();
-        m_State = State::SentConnectionRequest;
-        m_ResendCount = 0;
+        SendConnectionRequest([this](asio::error_code error, std::size_t length)
+        {
+            m_LastSend = std::chrono::steady_clock::now();
+            m_State = State::SentConnectionRequest;
+            m_ResendCount = 0;        
+        });
 
         ScheduleResend();
     }
@@ -78,12 +80,13 @@ private:
         data.Read(m_ServerChallenge);
         std::println("Challenge received from server: {}.", m_ServerChallenge);
         
-        SendChallengeResponse();
-        m_State = State::SentChallengeResponse;
-        m_LastSend = std::chrono::steady_clock::now();
+        SendChallengeResponse([this](asio::error_code error, std::size_t length)
+        {
+            m_State = State::SentChallengeResponse;
+            m_LastSend = std::chrono::steady_clock::now();
+        });
         m_ResendCount = 0;
 
-        std::println("Sent challenge response");
     }
 
     void ConnectionAccepted()
@@ -94,7 +97,8 @@ private:
         m_ConnectCallback({}, Connection(m_Transport, m_Endpoint));
     }
 
-    void SendConnectionRequest()
+    template<typename Handler>
+    void SendConnectionRequest(Handler&& handler)
     {
         Header header;
         header.timestamp = TimeAsMilliseconds();
@@ -103,10 +107,11 @@ private:
         auto buffer = Buffer::Create(sizeof(Header));
         Serialize(header, *buffer);
 
-        m_Transport.Send(buffer, m_Endpoint);
+        m_Transport.Send(buffer, m_Endpoint, std::forward<Handler>(handler));
     }
 
-    void SendChallengeResponse()
+    template<typename Handler>
+    void SendChallengeResponse(Handler&& handler)
     {
         Header header;
         header.timestamp = TimeAsMilliseconds();
@@ -117,7 +122,7 @@ private:
         Serialize(header, *buffer);
         buffer->Write(m_ServerChallenge);
 
-        m_Transport.Send(buffer, m_Endpoint);
+        m_Transport.Send(buffer, m_Endpoint, std::forward<Handler>(handler));
     }
     
     void ScheduleResend()
@@ -157,15 +162,20 @@ private:
             {
             case State::SentConnectionRequest:
             {
-                SendConnectionRequest();
-                m_LastSend = std::chrono::steady_clock::now();
-                m_ResendCount++;
+                SendConnectionRequest([this](asio::error_code error, std::size_t length)
+                {
+                    m_LastSend = std::chrono::steady_clock::now();
+                    m_ResendCount++;
+                });
             } break;
             case State::SentChallengeResponse:
             {
-                SendChallengeResponse();
-                m_LastSend = std::chrono::steady_clock::now();
-                m_ResendCount++;
+                SendChallengeResponse([this](asio::error_code error, std::size_t length)
+                {
+                    m_LastSend = std::chrono::steady_clock::now(); 
+                    m_ResendCount++;
+                });
+                
             } break;
             }
             
@@ -193,6 +203,9 @@ private:
     asio::steady_timer m_ResendTimer;
     std::chrono::steady_clock::time_point m_LastSend;
     uint32_t m_ServerChallenge = 0;
+
+    uint32_t sequence = 0;
+    uint32_t remoteSequence = 0;
 
     int m_ResendCount = 0;
     constexpr static int MaxRetries = 5;

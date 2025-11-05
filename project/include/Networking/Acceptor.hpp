@@ -55,15 +55,17 @@ public:
         
         switch(header.messageType)
         {
-            case MessageType::CONNECTION_REQUEST:
+            using enum MessageType;
+
+            case CONNECTION_REQUEST:
             {
                 HandleConnectionRequest(from, buffer);
             } break;
-            case MessageType::CHALLENGE_RESPONSE:
+            case CHALLENGE_RESPONSE:
             {
                 HandleChallengeResponse(from, buffer);
             } break;
-            case MessageType::ACKNOWLEDGE:
+            case ACKNOWLEDGE:
             {
 
             } break;
@@ -199,9 +201,13 @@ public:
         // Increment the local sequence for the next outgoing message
         connectionIterator->second.sequence += 1;
         
-        auto connection = Connection(m_Transport, connectionIterator->first);
-        connection.reliability.sequencer.SetSequence(connectionIterator->second.sequence);
-        connection.reliability.sequencer.SetRemoteSequence(connectionIterator->second.remoteSequence);
+        auto connection = Connection
+        (
+            m_Transport,
+            connectionIterator->first,
+            connectionIterator->second.sequence,
+            connectionIterator->second.remoteSequence
+        );
 
         SendConnectionAccepted(connection);
 
@@ -277,11 +283,13 @@ public:
     
     void SendConnectionAccepted(Connection& connection)
     {
+        auto& sequencer = connection.GetReliabilityLayer().GetPacketSequencer();
+        
         Header header;
         header.messageType = MessageType::CONNECTION_ACCEPTED;
-        header.sequence = connection.reliability.sequencer.ObtainNewSequence();
-        header.acknowledged = connection.reliability.sequencer.RemoteSequence();
-        header.acknowledgeBits = connection.reliability.sequencer.AcknowledgeBits();
+        header.sequence = sequencer.ObtainNewSequence();
+        header.acknowledged = sequencer.RemoteSequence();
+        header.acknowledgeBits = sequencer.AcknowledgeBits();
         header.flags = UDP_Reliable;
         header.timestamp = TimeAsMilliseconds();
         

@@ -3,6 +3,7 @@
 #include <memory>
 #include <chrono>                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
 #include <unordered_map>
+#include <optional>
 
 #include "NetworkBuffer.hpp"
 #include "Sequencer.hpp"
@@ -26,6 +27,45 @@ public:
 
     PacketSequencer& GetPacketSequencer() { return m_Sequencer; }
     
+    // Return sequence of the message if added succesfully
+    std::optional<uint32_t> AddMessage(std::shared_ptr<Buffer> buffer)
+    {
+        const auto sequence = m_Sequencer.CurrentSequence();
+        auto [it, inserted] = m_ResendBuffer.try_emplace
+        (
+            sequence, // Key
+            buffer, sequence
+        );
+
+        if(inserted)
+        {
+            return sequence;
+        }
+
+        return std::nullopt;
+    }
+
+    const std::unordered_map<uint32_t, ReliableMessage>& GetPendingResends() const
+    {
+        return m_ResendBuffer;
+    }
+
+    void UpdateSendTime(uint32_t sequence)
+    {
+        if(auto it = m_ResendBuffer.find(sequence); it != m_ResendBuffer.end())
+        {
+            it->second.lastSent = std::chrono::steady_clock::now();
+        }
+    }
+
+    void IncrementResendCount(uint32_t sequence)
+    {
+        if(auto it = m_ResendBuffer.find(sequence); it != m_ResendBuffer.end())
+        {
+            it->second.retries++;
+        }
+    }
+
     // Return true if the message hasn't been acknowledged before
     bool HandleIncoming(uint32_t remoteSequence, uint32_t acknowledge, uint32_t acknowledgeBits)
     {
