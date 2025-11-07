@@ -177,10 +177,12 @@ public:
 
         for(auto& [id, client] : m_Clients)
         {
+            auto& reliability = client.GetReliabilityLayer().GetPacketSequencer();
+
             header.clientId = id;
-            header.sequence = client.sequencer.ObtainNewSequence();
-            header.acknowledged = client.sequencer.RemoteSequence();
-            header.acknowledgeBits = client.sequencer.AcknowledgeBits();
+            header.sequence = reliability.ObtainNewSequence();
+            header.acknowledged = reliability.RemoteSequence();
+            header.acknowledgeBits = reliability.AcknowledgeBits();
             
             auto buffer = Buffer::Create(sizeof(Header) + sizeof(std::size_t) + message.length());
 
@@ -255,9 +257,12 @@ private:
         header.clientId = id;
         header.messageType = MessageType::MESSAGE;
         header.flags = UDP_Reliable;
-        header.sequence = client.sequencer.ObtainNewSequence();
-        header.acknowledged = client.sequencer.RemoteSequence();
-        header.acknowledgeBits = client.sequencer.AcknowledgeBits();
+
+        auto& sequencer = client.GetReliabilityLayer().GetPacketSequencer();
+        header.sequence = sequencer.ObtainNewSequence();
+        header.acknowledged = sequencer.RemoteSequence();
+        header.acknowledgeBits = sequencer.AcknowledgeBits();
+        
         header.timestamp = TimeAsMilliseconds();
 
         return header;

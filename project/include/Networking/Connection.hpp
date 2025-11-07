@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 
 #include <asio.hpp>
 
@@ -17,24 +18,25 @@ class Connection
 public:
     using Clock = std::chrono::steady_clock;
 
-    Transport& m_Transport;
-    asio::ip::udp::endpoint m_Endpoint;
-
-    ReliabilityLayer m_Reliability;
-
-    Clock::time_point m_LastMessageTime;
-
-    Connection(Transport& transport, const asio::ip::udp::endpoint& endpoint, uint32_t sequence, uint32_t remoteSequence)
+    Connection(Transport& transport, const asio::ip::udp::endpoint& endpoint, uint32_t initialSequence, uint32_t initialRemoteSequence)
         : m_Transport(transport), m_Endpoint(endpoint)
     {
         auto& sequencer = m_Reliability.GetPacketSequencer();
-        sequencer.SetSequence(sequence);
-        sequencer.SetRemoteSequence(remoteSequence);
+        sequencer.SetSequence(initialSequence);
+        sequencer.SetRemoteSequence(initialRemoteSequence);
     }
 
     Connection(Transport& transport)
         : m_Transport(transport)
     {}
+
+    // No copy
+    Connection(const Connection&) = delete;
+    Connection& operator=(const Connection&) = delete;
+
+    // Movable
+    Connection(Connection&&) = default;
+    Connection& operator=(Connection&&) = default;
 
     ReliabilityLayer& GetReliabilityLayer() { return m_Reliability; }
     Clock::time_point GetLastSendTime() { return m_LastMessageTime; }
@@ -47,8 +49,8 @@ public:
     template<typename Handler>
     void Send(std::shared_ptr<Buffer> buffer, Handler&& handler)
     {
-        m_Transport.Send(buffer, m_Endpoint,
-        [this, callback = std::forward<Handle>(handler)](asio::error_code ec, std::size_t length))
+        m_Transport.get().Send(buffer, m_Endpoint,
+        [this, callback = std::forward<Handler>(handler)](asio::error_code ec, std::size_t length)
         {
             callback(ec, length);
         });
@@ -56,7 +58,7 @@ public:
     
     void Send(std::shared_ptr<Buffer> buffer)
     {
-        m_Transport.Send(buffer, m_Endpoint,[this](asio::error_code ec, std::size_t length)
+        m_Transport.get().Send(buffer, m_Endpoint,[this](asio::error_code ec, std::size_t length)
         {
             m_LastMessageTime = Clock::now();
         });
@@ -99,6 +101,13 @@ public:
             }
         }
     }
+private:
+    std::reference_wrapper<Transport> m_Transport;
+    asio::ip::udp::endpoint m_Endpoint;
+
+    ReliabilityLayer m_Reliability;
+
+    Clock::time_point m_LastMessageTime;
 };
 
 }

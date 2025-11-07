@@ -6,6 +6,7 @@
 
 #include "Transport.hpp"
 #include "Connection.hpp"
+#include "Random.hpp"
 
 namespace Networking
 {

@@ -15,7 +15,7 @@ namespace Networking
 class Connector
 {
 public:
-    using ConnectCallback = std::function<void(asio::error_code, Connection)>;
+    using ConnectCallback = std::function<void(asio::error_code, Connection&&)>;
 
     Connector(asio::io_context& context, Transport& transport)
         : m_Transport(transport), m_ResendTimer(context)
@@ -94,7 +94,7 @@ private:
         std::println("Connection established with server");
 
         m_State = State::Connected;
-        m_ConnectCallback({}, Connection(m_Transport, m_Endpoint));
+        m_ConnectCallback({}, Connection(m_Transport, m_Endpoint, m_Sequence, m_RemoteSequence));
     }
 
     template<typename Handler>
@@ -204,8 +204,8 @@ private:
     std::chrono::steady_clock::time_point m_LastSend;
     uint32_t m_ServerChallenge = 0;
 
-    uint32_t sequence = 0;
-    uint32_t remoteSequence = 0;
+    uint32_t m_Sequence = 0;
+    uint32_t m_RemoteSequence = 0;
 
     int m_ResendCount = 0;
     constexpr static int MaxRetries = 5;

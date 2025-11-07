@@ -13,7 +13,7 @@ namespace Networking
 class Client
 {
 public:
-    Client() : m_Context(), m_Transport(m_Context), m_Connection(m_Transport)
+    Client() : m_Context(), m_Transport(m_Context), m_Connection(m_Transport), m_Connector(m_Context, m_Transport)
     {
         std::println("UDPClient constructed.");
 
@@ -44,11 +44,13 @@ public:
         try
         {
             m_Transport.Bind(udp::endpoint(udp::v4(), 0));
-            m_Connection.endpoint = remoteEndpoint;
+            m_Connector.Connect(remoteEndpoint, [this](asio::error_code ec, Connection&& connection)
+            {
+                m_Connection = std::move(connection);
+                std::println("Connection to server established");
+            });
 
             std::println("Client created at {}:{}", m_Transport.LocalEndpoint().address().to_string(), m_Transport.LocalEndpoint().port());
-
-            ScheduleJoinServer();
 
             m_NetworkThread = std::thread([this]()
             {
@@ -88,36 +90,24 @@ public:
 
         try
         {
+            auto& sequencer = m_Connection.GetReliabilityLayer().GetPacketSequencer();
+            
             Header header;
             header.flags = !reliable ? UDP_Unreliable : UDP_Reliable;
-            header.sequence = m_Connection.reliability.sequencer.ObtainNewSequence();
-            header.acknowledged = m_Connection.reliability.sequencer.RemoteSequence();
-            header.acknowledgeBits = m_Connection.reliability.sequencer.AcknowledgeBits();
+            header.sequence = sequencer.ObtainNewSequence();
+            header.acknowledged = sequencer.RemoteSequence();
+            header.acknowledgeBits = sequencer.AcknowledgeBits();
             header.timestamp = TimeAsMilliseconds();
 
             header.clientId = m_ClientId;
             header.messageType = MessageType::MESSAGE;
             
             /* Create message containing data ie. serialize data */
-            auto newBuffer = std::make_shared<Networking::Buffer>(sizeof(Header) + sizeof(std::size_t) + message.size());
+            auto newBuffer = Buffer::Create(sizeof(Header) + sizeof(std::size_t) + message.size());
             Serialize(header, *newBuffer);
             newBuffer->Write(message);
 
-            if(reliable)
-            {
-                m_Connection.reliability.resendBuffer[header.sequence] = ReliableMessage
-                {
-                    newBuffer,
-                    header.sequence
-                };
-            }
-
-            m_Connection.Send(newBuffer);
-
-            if(reliable)
-            {
-                m_Connection.reliability.resendBuffer[header.sequence].lastSent = Connection::Clock::now();
-            }
+            m_Connection.SendReliable(newBuffer);
 
             return true;
         }
@@ -167,6 +157,7 @@ private:
     
     Transport m_Transport;
     Connection m_Connection;
+    Connector m_Connector;
 
     ClientId m_ClientId = 0;
 };

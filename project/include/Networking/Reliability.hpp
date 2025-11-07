@@ -24,7 +24,6 @@ struct ReliableMessage
 class ReliabilityLayer
 {
 public:
-
     PacketSequencer& GetPacketSequencer() { return m_Sequencer; }
     
     // Return sequence of the message if added succesfully

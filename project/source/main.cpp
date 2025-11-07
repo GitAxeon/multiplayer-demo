@@ -21,6 +21,8 @@
 #include "Client.hpp"
 #include "Server.hpp"
 
+#include "Networking/Buffer.hpp"
+
 SDL_Texture* LoadTexture(SDL_Renderer* renderer, const std::string& path)
 {
     int width = 0, height = 0, channels = 0;
@@ -251,7 +253,7 @@ int main(int argc, char* argv[])
                         {
                             case 0:
                                 SDL_SetTextureScaleMode(renderTexture, SDL_SCALEMODE_LINEAR);
-                                std::println("LINEAR");
+                                std::println("Linear");
                             break;
                             case 1:
                                 SDL_SetTextureScaleMode(renderTexture, SDL_SCALEMODE_NEAREST);
