@@ -210,27 +210,6 @@ private:
         return result;
     }
 
-    bool ReadNonTrivial(Buffer& destination)
-    {
-        uint32_t length{0};
-
-        if(!Read(length))
-            return false;
-        
-        if(length == 0)
-            return true;
-        
-        if(destination.Capacity() < length)
-            return false;
-        
-        bool result = m_Buffer.ReadN(destination.Data(), m_Position, length);
-
-        if(result)
-            m_Position += static_cast<std::size_t>(length);
-        
-        return result;
-    }
-
 private:
     Buffer& m_Buffer;
 };
@@ -285,13 +264,11 @@ private:
 
         return result;
     }
-
+    
+    // Write the bytes as is so the source is expected to contain serialized data, it won't be able to be read back as a Buffer
     bool WriteNonTrivial(const Buffer& source)
     {
         const uint32_t length = static_cast<uint32_t>(source.Size());
-
-        if(!Write(length))
-            return false;
         
         if(length == 0)
             return true;

@@ -18,24 +18,34 @@ public:
     {
         std::println("Server created");
 
-        m_Transport.SetReceiveCallback([this](auto& from, auto& data) -> void
+        m_Transport.SetReceiveCallback([this](auto ec, auto& from, auto& data) -> void
         {
-            try
-            {
-                OnReceiveData(from, data);
-            }
-            catch(std::exception& e)
-            {
-                std::println("Error: {}", e.what());
-            }
+            OnReceiveData(from, data);
         });
 
         m_Acceptor.SetCallback([this](auto ec, auto connection)
         {
             std::println("New connection!");
+            auto id = m_MonotonicClientId;
+            m_MonotonicClientId++;
+
+            m_Clients[id] = connection;
+
+            SendHello(id);
         });
     }
     
+    void SendHello(ClientId id)
+    {
+        auto buffer = Buffer::CreateShared(sizeof(uint32_t) + 5);
+        StreamWriter serializer(*buffer);
+
+        const std::string message = "Hello";
+        serializer.Write(message);
+
+        SendReliable(id, buffer);
+    }
+
     ~Server()
     {
         Stop();
@@ -126,7 +136,7 @@ public:
         if(header.flags & UDP_Reliable)
         {
             auto clientIt = m_Clients.find(header.clientId);
-            bool isNew = clientIt->second.HandleIncoming(header.sequence, header.acknowledged, header.acknowledgeBits);
+            bool isNew = clientIt->second->HandleIncoming(header.sequence, header.acknowledged, header.acknowledgeBits);
             
             if(!isNew)
                 return;
@@ -187,7 +197,7 @@ public:
 
         for(auto& [id, client] : m_Clients)
         {
-            auto& reliability = client.GetReliabilityLayer().GetPacketSequencer();
+            auto& reliability = client->GetReliabilityLayer().GetPacketSequencer();
 
             header.clientId = id;
             header.sequence = reliability.ObtainNewSequence();
@@ -202,11 +212,11 @@ public:
 
             if(!reliable)
             {
-                client.Send(buffer);
+                client->Send(buffer);
             }
             else
             {
-                client.SendReliable(buffer);
+                client->SendReliable(buffer);
             }
         }
     }
@@ -218,7 +228,7 @@ public:
         if(clientIterator == m_Clients.end())
             return;
 
-        Header header = CreateReliableHeader(id, clientIterator->second);
+        Header header = CreateReliableHeader(id, *(clientIterator->second));
 
         auto packetWithHeader = Buffer::CreateShared(sizeof(Header) + packet->Size());
         
@@ -226,7 +236,7 @@ public:
         serializer.Write(header);
         serializer.Write(*packet);
 
-        clientIterator->second.SendReliable(packetWithHeader);
+        clientIterator->second->SendReliable(packetWithHeader);
     }
 
 private:
@@ -255,7 +265,7 @@ private:
 
             for(auto& [id, connection] : m_Clients)
             {
-                connection.Resend(now);
+                connection->Resend(now);
                 // if(now - connection.lastMessageTime > 1s) disconnect
             }
 
@@ -269,13 +279,12 @@ private:
         header.clientId = id;
         header.messageType = MessageType::MESSAGE;
         header.flags = UDP_Reliable;
+        header.timestamp = TimeAsMilliseconds();
 
         auto& sequencer = client.GetReliabilityLayer().GetPacketSequencer();
         header.sequence = sequencer.ObtainNewSequence();
         header.acknowledged = sequencer.RemoteSequence();
         header.acknowledgeBits = sequencer.AcknowledgeBits();
-        
-        header.timestamp = TimeAsMilliseconds();
 
         return header;
     }
@@ -288,7 +297,7 @@ private:
     
     Acceptor m_Acceptor;
 
-    std::unordered_map<ClientId, Connection> m_Clients;
+    std::unordered_map<ClientId, std::shared_ptr<Connection>> m_Clients;
     ClientId m_MonotonicClientId = 1;
 
     asio::steady_timer m_HeartbeatTimer;

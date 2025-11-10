@@ -28,7 +28,7 @@ struct PendingClient
 class Acceptor
 {
 public:
-    using AcceptCallback = std::function<void(asio::error_code, Connection)>; 
+    using AcceptCallback = std::function<void(asio::error_code, std::shared_ptr<Connection>)>; 
 
     Acceptor(asio::io_context& context, Transport& transport)
         : m_Context(context), m_Transport(transport), m_ChallengeTimer(context)
@@ -188,7 +188,7 @@ public:
         // Increment the local sequence for the next outgoing message
         connectionIterator->second.sequence += 1;
         
-        auto connection = Connection
+        auto connection = std::make_shared<Connection>
         (
             m_Transport,
             connectionIterator->first,
@@ -198,9 +198,9 @@ public:
         
         m_PendingConnections.erase(connectionIterator);
 
-        SendConnectionAccepted(connection, [this](auto, auto)
+        SendConnectionAccepted(connection, [this, connection](auto, auto)
         {
-            m_AcceptCallback({}, std::move(connection)); 
+            m_AcceptCallback({}, connection); 
         });
     }
 
@@ -276,9 +276,9 @@ public:
     }
     
     template<typename Handler>
-    void SendConnectionAccepted(Connection& connection, Handler&& handler)
+    void SendConnectionAccepted(std::shared_ptr<Connection> connection, Handler&& handler)
     {
-        auto& sequencer = connection.GetReliabilityLayer().GetPacketSequencer();
+        auto& sequencer = connection->GetReliabilityLayer().GetPacketSequencer();
         
         Header header;
         header.messageType = MessageType::CONNECTION_ACCEPTED;
@@ -293,7 +293,7 @@ public:
         StreamWriter serializer(*buffer);
         serializer.Write(header);
  
-        connection.SendReliable(buffer, std::forward<Handler>(handler)); 
+        connection->SendReliable(buffer, std::forward<Handler>(handler)); 
     }
 
 private:

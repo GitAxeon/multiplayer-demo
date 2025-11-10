@@ -17,7 +17,7 @@ public:
     {
         std::println("UDPClient constructed.");
 
-        m_Transport.SetReceiveCallback([this](auto& from, auto& data)
+        m_Transport.SetReceiveCallback([this](auto ec, auto& from, auto& data)
         {
             OnReceiveData(from, data);
         });
@@ -156,13 +156,9 @@ private:
             
             std::println
             (
-                "String received from server: {}.",
+                "String received from server: {}",
                 message
             );
-        } break;
-        case MessageType::ACKNOWLEDGE:
-        {
-
         } break;
         }
     }

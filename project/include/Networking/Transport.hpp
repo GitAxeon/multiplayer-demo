@@ -14,7 +14,7 @@ namespace Networking
 class Transport
 {
 public:
-    using ReceiveCallback = std::function<void(const asio::ip::udp::endpoint&, Buffer&)>; 
+    using ReceiveCallback = std::function<void(asio::error_code, const asio::ip::udp::endpoint&, Buffer&)>; 
 
     Transport(asio::io_context& context)
         : m_Socket(context)
@@ -78,7 +78,7 @@ public:
 
     void Send(std::shared_ptr<Buffer> buffer, const asio::ip::udp::endpoint& endpoint)
     {
-        m_Socket.async_send_to(asio::buffer(buffer->Data(), buffer->Size()), endpoint, [buffer, endpoint](std::error_code ec, std::size_t length)
+        m_Socket.async_send_to(asio::buffer(buffer->Data(), buffer->Size()), endpoint, [buffer, endpoint](asio::error_code ec, std::size_t length)
         {
             if(ec)
                 std::println("Send failed for {}: {}", endpoint, ec.message());
@@ -89,7 +89,7 @@ public:
     void Send(std::shared_ptr<Buffer> buffer, const asio::ip::udp::endpoint& endpoint, Handler&& handler)
     {
         m_Socket.async_send_to(asio::buffer(buffer->Data(), buffer->Size()), endpoint, 
-        [buffer, callback = std::forward<Handler>(handler)](std::error_code ec, std::size_t length) mutable
+        [buffer, callback = std::forward<Handler>(handler)](asio::error_code ec, std::size_t length) mutable
         {
             callback(ec, length);
         });
@@ -101,7 +101,7 @@ public:
         (
             asio::buffer(m_ReceiveBuffer.Data(), m_ReceiveBuffer.Capacity()),
             m_RemoteEndpoint,
-            [this](std::error_code error, std::size_t bytesWritten)
+            [this](asio::error_code error, std::size_t bytesWritten)
             {
                 if(error)
                 {
@@ -113,7 +113,7 @@ public:
                 else if(bytesWritten > 0)
                 {
                     m_ReceiveBuffer.SetSize(bytesWritten);
-                    m_ReceiveCallback(m_RemoteEndpoint, m_ReceiveBuffer);
+                    m_ReceiveCallback(error, m_RemoteEndpoint, m_ReceiveBuffer);
                 }
 
                 ScheduleReceive();
