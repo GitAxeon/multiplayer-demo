@@ -44,13 +44,15 @@ public:
         try
         {
             m_Transport.Bind(udp::endpoint(udp::v4(), 0));
+            m_Transport.ScheduleReceive();
+
             m_Connector.Connect(remoteEndpoint, [this](asio::error_code ec, Connection&& connection)
             {
                 m_Connection = std::move(connection);
                 std::println("Connection to server established");
             });
 
-            std::println("Client created at {}:{}", m_Transport.LocalEndpoint().address().to_string(), m_Transport.LocalEndpoint().port());
+            std::println("Client created at {}", m_Transport.LocalEndpoint());
 
             m_NetworkThread = std::thread([this]()
             {
@@ -103,11 +105,13 @@ public:
             header.messageType = MessageType::MESSAGE;
             
             /* Create message containing data ie. serialize data */
-            auto newBuffer = Buffer::Create(sizeof(Header) + sizeof(std::size_t) + message.size());
-            Serialize(header, *newBuffer);
-            newBuffer->Write(message);
+            auto buffer = Buffer::CreateShared(sizeof(Header) + sizeof(std::size_t) + message.size());
 
-            m_Connection.SendReliable(newBuffer);
+            StreamWriter serializer(*buffer);
+            serializer.Write(header);
+            serializer.Write(message);
+
+            m_Connection.SendReliable(buffer);
 
             return true;
         }
@@ -124,17 +128,31 @@ public:
     }
 
 private:
-    void OnReceiveData(const asio::ip::udp::endpoint& server, Buffer& data)
+    void OnReceiveData(const asio::ip::udp::endpoint& from, Buffer& data)
     {
+        if(m_Connector.Connected())
+        {
+            ProcessMessage(from, data);
+        }
+        else
+        {
+            m_Connector.OnReceiveData(from, data);
+        }
+    }
+
+    void ProcessMessage(const asio::ip::udp::endpoint& from, Buffer& data)
+    {
+        StreamReader deserializer(data);
+
         Header header;
-        Deserialize(header, data);
+        deserializer.Read(header);
 
         switch(header.messageType)
         {
         case MessageType::MESSAGE:
         {
             std::string message;
-            data.Read(message);
+            deserializer.Read(message);
             
             std::println
             (
@@ -148,7 +166,6 @@ private:
         } break;
         }
     }
-
 private:
 
 private:

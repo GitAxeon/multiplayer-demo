@@ -6,22 +6,16 @@
 #include <asio.hpp>
 
 #include "AsioFormat.hpp"
-#include "NetworkBuffer.hpp"
+#include "Buffer.hpp"
 
 namespace Networking
 {
 
-struct Transport
+class Transport
 {
+public:
     using ReceiveCallback = std::function<void(const asio::ip::udp::endpoint&, Buffer&)>; 
 
-    asio::ip::udp::socket m_Socket;
-    ReceiveCallback m_ReceiveCallback;
-
-    // Used when receiving data
-    Buffer m_ReceiveBuffer{512};
-    asio::ip::udp::endpoint m_RemoteEndpoint;
-    
     Transport(asio::io_context& context)
         : m_Socket(context)
     {}
@@ -87,14 +81,7 @@ struct Transport
         m_Socket.async_send_to(asio::buffer(buffer->Data(), buffer->Size()), endpoint, [buffer, endpoint](std::error_code ec, std::size_t length)
         {
             if(ec)
-            {
-                std::println
-                (
-                    "Send failed for {}: {}",
-                    endpoint,
-                    ec.message()
-                );
-            }
+                std::println("Send failed for {}: {}", endpoint, ec.message());
         });
     }
 
@@ -102,7 +89,7 @@ struct Transport
     void Send(std::shared_ptr<Buffer> buffer, const asio::ip::udp::endpoint& endpoint, Handler&& handler)
     {
         m_Socket.async_send_to(asio::buffer(buffer->Data(), buffer->Size()), endpoint, 
-        [buffer, callback = std::forward<Handler>(handler)](std::error_code ec, std::size_t length)
+        [buffer, callback = std::forward<Handler>(handler)](std::error_code ec, std::size_t length) mutable
         {
             callback(ec, length);
         });
@@ -114,7 +101,7 @@ struct Transport
         (
             asio::buffer(m_ReceiveBuffer.Data(), m_ReceiveBuffer.Capacity()),
             m_RemoteEndpoint,
-            [this](std::error_code error, std::size_t bytes)
+            [this](std::error_code error, std::size_t bytesWritten)
             {
                 if(error)
                 {
@@ -123,8 +110,9 @@ struct Transport
                     else
                         std::println("Error receiving data: {}", error.message());
                 }
-                else if(bytes > 0)
+                else if(bytesWritten > 0)
                 {
+                    m_ReceiveBuffer.SetSize(bytesWritten);
                     m_ReceiveCallback(m_RemoteEndpoint, m_ReceiveBuffer);
                 }
 
@@ -132,6 +120,15 @@ struct Transport
             }
         );
     }
+    
+private:
+    asio::ip::udp::socket m_Socket;
+    ReceiveCallback m_ReceiveCallback;
+
+    // Used when receiving data
+    Buffer m_ReceiveBuffer{512};
+    asio::ip::udp::endpoint m_RemoteEndpoint;
+    
 };
 
 }

@@ -49,11 +49,11 @@ public:
     
     void OnReceiveData(const asio::ip::udp::endpoint& from, Buffer& buffer)
     {
-        buffer.Reset();
+        StreamReader deserializer(buffer);
 
         Header header;
-        Deserialize(header, buffer);
-        
+        deserializer.Read(header);
+
         switch(header.messageType)
         {
             using enum MessageType;
@@ -77,24 +77,14 @@ public:
     {
         if(m_PendingConnections.find(from) == m_PendingConnections.end())
         {
-            buffer.Reset();
+            StreamReader deserializer(buffer);
             
             Header header;
-            Deserialize(header, buffer);
+            deserializer.Read(header);
             
-            uint32_t remoteSequence = 0;
-            
-            try
-            {
-                buffer.Read(remoteSequence);
-            }
-            catch(const std::exception& e)
-            {
-                std::println("Buffer didn't contain sequence number. Dropping connection request.");
-                return;
-            }
+            uint32_t remoteSequence = header.sequence;
 
-            std::println("Received connection request from {}:{}", from.address().to_string(), from.port());
+            std::println("Received connection request from {}", from);
             
             const uint32_t challenge = Random::RandomInt<uint32_t>();
 
@@ -121,12 +111,7 @@ public:
         
         if(connectionIterator == m_PendingConnections.end())
         {
-            std::println
-            (
-                "Unexpectedly received challenge response from unknown client: {}:{}",
-                from.address().to_string(),
-                from.port()
-            );
+            std::println("Unexpectedly received challenge response from unknown client: {}", from);
 
             return;
         }
@@ -134,12 +119,13 @@ public:
         // This should be the second message from the client so I manually increment the sequence here
         connectionIterator->second.remoteSequence += 1;
 
-        buffer.Reset();
+        StreamReader deserializer(buffer);
+
         Header header;
-        Deserialize(header, buffer);
+        deserializer.Read(header);
 
         uint32_t challenge = 0;
-        buffer.Read(challenge);
+        deserializer.Read(challenge);
 
         std::println("Challenge response received from {}:{}: {}", from.address().to_string(), from.port(), challenge);
 
@@ -209,12 +195,13 @@ public:
             connectionIterator->second.sequence,
             connectionIterator->second.remoteSequence
         );
-
-        SendConnectionAccepted(connection);
-
-        m_AcceptCallback({}, std::move(connection));
-
+        
         m_PendingConnections.erase(connectionIterator);
+
+        SendConnectionAccepted(connection, [this](auto, auto)
+        {
+            m_AcceptCallback({}, std::move(connection)); 
+        });
     }
 
     void ScheduleChallengeCheck()
@@ -272,17 +259,24 @@ public:
         Header header;
         header.messageType = MessageType::CHALLENGE;
         header.sequence = clientIterator->second.sequence;
+        header.acknowledged = clientIterator->second.remoteSequence;
         header.timestamp = TimeAsMilliseconds();
 
-        auto buffer = Buffer::Create(sizeof(Header) + sizeof(uint32_t));
+        auto buffer = Buffer::CreateShared(sizeof(Header) + sizeof(uint32_t));
+        
+        StreamWriter serializer(*buffer);
+        
+        serializer.Write(header);
+        serializer.Write(clientIterator->second.challenge);
 
-        Serialize(header, *buffer);
-        buffer->Write(clientIterator->second.challenge);
-
-        m_Transport.Send(buffer, endpoint);
+        m_Transport.Send(buffer, endpoint, [endpoint](asio::error_code ec, std::size_t length)
+        {
+            std::println("Sent challenge to {}", endpoint);
+        });
     }
     
-    void SendConnectionAccepted(Connection& connection)
+    template<typename Handler>
+    void SendConnectionAccepted(Connection& connection, Handler&& handler)
     {
         auto& sequencer = connection.GetReliabilityLayer().GetPacketSequencer();
         
@@ -294,11 +288,12 @@ public:
         header.flags = UDP_Reliable;
         header.timestamp = TimeAsMilliseconds();
         
-        auto buffer = Buffer::Create(sizeof(Header));
+        auto buffer = Buffer::CreateShared(sizeof(Header));
 
-        Serialize(header, *buffer);
-        
-        connection.SendReliable(buffer); 
+        StreamWriter serializer(*buffer);
+        serializer.Write(header);
+ 
+        connection.SendReliable(buffer, std::forward<Handler>(handler)); 
     }
 
 private:

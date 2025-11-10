@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <print>
 
 #include "NetworkBuffer.hpp"
 #include "Transport.hpp"
@@ -21,16 +22,25 @@ public:
         : m_Transport(transport), m_ResendTimer(context)
     {}
 
+    bool Connected() const
+    {
+        return m_State == State::Connected;
+    }
+
     void Connect(const asio::ip::udp::endpoint& endpoint, ConnectCallback connectCallback)
     {
         m_Endpoint = endpoint;
         m_ConnectCallback = std::move(connectCallback);
 
+        m_Sequence = Random::RandomInt<uint32_t>();
+
         SendConnectionRequest([this](asio::error_code error, std::size_t length)
         {
+            std::println("Sent connection request to {}", m_Endpoint);
+
             m_LastSend = std::chrono::steady_clock::now();
             m_State = State::SentConnectionRequest;
-            m_ResendCount = 0;        
+            m_ResendCount = 0;
         });
 
         ScheduleResend();
@@ -44,10 +54,12 @@ public:
             return;
         }
 
-        data.Reset();
+        std::println("Message received from the server. Who knows what's inside");
+
+        StreamReader deserializer(data);
 
         Header header;
-        Deserialize(header, data);
+        deserializer.Read(header);
 
         switch(header.messageType)
         {
@@ -67,17 +79,21 @@ public:
 private:
     void HandleChallengeMessage(Buffer& data)
     {
-        data.Reset();
-        Header header;
-        Deserialize(header, data);
-        
         if(m_State != State::SentConnectionRequest)
         {
             std::println("Unexpectedly received challenge from Server. Ignoring packet. HandshakeState: {}", static_cast<uint32_t>(m_State));
             return;
         }
 
-        data.Read(m_ServerChallenge);
+        StreamReader deserializer(data);
+
+        Header header;
+        deserializer.Read(header);
+        deserializer.Read(m_ServerChallenge);
+
+        m_RemoteSequence = header.sequence;
+        m_Sequence++;
+
         std::println("Challenge received from server: {}.", m_ServerChallenge);
         
         SendChallengeResponse([this](asio::error_code error, std::size_t length)
@@ -103,9 +119,12 @@ private:
         Header header;
         header.timestamp = TimeAsMilliseconds();
         header.messageType = MessageType::CONNECTION_REQUEST;
+        header.sequence = m_Sequence;
+
+        auto buffer = Buffer::CreateShared(sizeof(Header));
         
-        auto buffer = Buffer::Create(sizeof(Header));
-        Serialize(header, *buffer);
+        StreamWriter serializer(*buffer);
+        serializer.Write(header);
 
         m_Transport.Send(buffer, m_Endpoint, std::forward<Handler>(handler));
     }
@@ -115,12 +134,15 @@ private:
     {
         Header header;
         header.timestamp = TimeAsMilliseconds();
+        header.sequence = m_Sequence;
+        header.acknowledged = m_RemoteSequence;
         header.messageType = MessageType::CHALLENGE_RESPONSE;
         
-        auto buffer = Buffer::Create(sizeof(Header) + sizeof(m_ServerChallenge));
+        auto buffer = Buffer::CreateShared(sizeof(Header) + sizeof(m_ServerChallenge));
 
-        Serialize(header, *buffer);
-        buffer->Write(m_ServerChallenge);
+        StreamWriter serializer(*buffer);
+        serializer.Write(header);
+        serializer.Write(m_ServerChallenge);
 
         m_Transport.Send(buffer, m_Endpoint, std::forward<Handler>(handler));
     }

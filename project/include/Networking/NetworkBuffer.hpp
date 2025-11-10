@@ -8,7 +8,7 @@
 #include <stdexcept>
 #include <cstddef>
 
-namespace Networking
+namespace Networking_old
 {
 
 void CopyToNetworkOrder(const std::byte* source, std::byte* destination, std::size_t count);

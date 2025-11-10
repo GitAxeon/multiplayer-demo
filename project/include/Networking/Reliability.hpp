@@ -5,7 +5,7 @@
 #include <unordered_map>
 #include <optional>
 
-#include "NetworkBuffer.hpp"
+#include "Buffer.hpp"
 #include "Sequencer.hpp"
 
 namespace Networking

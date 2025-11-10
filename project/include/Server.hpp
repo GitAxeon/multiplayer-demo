@@ -4,6 +4,7 @@
 #include <thread>
 
 #include "Networking/Networking.hpp"
+#include "Networking/AsioFormat.hpp"
 
 namespace Networking
 {
@@ -19,7 +20,14 @@ public:
 
         m_Transport.SetReceiveCallback([this](auto& from, auto& data) -> void
         {
-            OnReceiveData(from, data);
+            try
+            {
+                OnReceiveData(from, data);
+            }
+            catch(std::exception& e)
+            {
+                std::println("Error: {}", e.what());
+            }
         });
 
         m_Acceptor.SetCallback([this](auto ec, auto connection)
@@ -49,15 +57,15 @@ public:
         try
         {            
             m_Transport.Bind(udp::endpoint(udp::v4(), port));
+            m_Transport.ScheduleReceive();
 
             std::println
             (
-                "Server starting at {}:{}",
-                m_Transport.LocalEndpoint().address().to_string(),
-                m_Transport.LocalEndpoint().port()
+                "Server starting at {}",
+                m_Transport.LocalEndpoint()
             );
 
-            ScheduleHeartbeat();
+            // ScheduleHeartbeat();
             ScheduleResend();
 
             m_NetworkThread = std::thread([this]()
@@ -85,8 +93,10 @@ public:
 
     void OnReceiveData(const asio::ip::udp::endpoint& from, Buffer& data)
     {
+        StreamReader deserializer(data);
+
         Header header;
-        Deserialize(header, data);
+        deserializer.Read(header);
 
         if(header.protocol != sProtocol)
         {
@@ -108,10 +118,10 @@ public:
     
     void ProcessMessage(const asio::ip::udp::endpoint& from, Buffer& data)
     {
-        data.Reset();
+        StreamReader deserializer(data);
 
         Header header;
-        Deserialize(header, data);
+        deserializer.Read(header);
 
         if(header.flags & UDP_Reliable)
         {
@@ -127,7 +137,7 @@ public:
         case MessageType::MESSAGE:
         {
             std::string message;
-            data.Read(message);
+            deserializer.Read(message);
 
             std::println
             (
@@ -184,10 +194,11 @@ public:
             header.acknowledged = reliability.RemoteSequence();
             header.acknowledgeBits = reliability.AcknowledgeBits();
             
-            auto buffer = Buffer::Create(sizeof(Header) + sizeof(std::size_t) + message.length());
+            auto buffer = Buffer::CreateShared(sizeof(Header) + sizeof(std::size_t) + message.length());
 
-            Serialize(header, *buffer);
-            buffer->Write(message);
+            StreamWriter serializer(*buffer);
+            serializer.Write(header);
+            serializer.Write(message);
 
             if(!reliable)
             {
@@ -209,10 +220,11 @@ public:
 
         Header header = CreateReliableHeader(id, clientIterator->second);
 
-        auto packetWithHeader = Buffer::Create(sizeof(Header) + packet->Size());
+        auto packetWithHeader = Buffer::CreateShared(sizeof(Header) + packet->Size());
         
-        Serialize(header, *packetWithHeader);
-        packetWithHeader->CopyFrom(*packet);
+        StreamWriter serializer(*packetWithHeader);
+        serializer.Write(header);
+        serializer.Write(*packet);
 
         clientIterator->second.SendReliable(packetWithHeader);
     }

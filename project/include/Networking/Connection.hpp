@@ -50,7 +50,7 @@ public:
     void Send(std::shared_ptr<Buffer> buffer, Handler&& handler)
     {
         m_Transport.get().Send(buffer, m_Endpoint,
-        [this, callback = std::forward<Handler>(handler)](asio::error_code ec, std::size_t length)
+        [this, callback = std::forward<Handler>(handler)](asio::error_code ec, std::size_t length) mutable
         {
             callback(ec, length);
         });
@@ -62,6 +62,24 @@ public:
         {
             m_LastMessageTime = Clock::now();
         });
+    }
+
+    template<typename Handler>
+    void SendReliable(std::shared_ptr<Buffer> buffer, Handler&& handler)
+    {
+        auto result = m_Reliability.AddMessage(buffer);
+
+        if(result)
+        {
+            Send(buffer,
+                [this, callback = std::forward<Handler>(handler), sequence = result.value()]
+                (asio::error_code ec, std::size_t length) mutable
+            {
+                m_Reliability.UpdateSendTime(sequence);
+                m_LastMessageTime = Clock::now();
+                callback(ec, length);
+            });
+        }
     }
 
     void SendReliable(std::shared_ptr<Buffer> buffer)
