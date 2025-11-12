@@ -17,9 +17,9 @@ public:
     {
         std::println("UDPClient constructed.");
 
-        m_Transport.SetReceiveCallback([this](auto ec, auto& from, auto& data)
+        m_Transport.SetReceiveCallback([this](auto& event)
         {
-            OnReceiveData(from, data);
+            OnReceiveData(event.from, event.data);
         });
     }
     

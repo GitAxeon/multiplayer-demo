@@ -18,14 +18,15 @@ public:
     {
         std::println("Server created");
 
-        m_Transport.SetReceiveCallback([this](auto ec, auto& from, auto& data) -> void
+        m_Transport.SetReceiveCallback([this](auto& event) -> void
         {
-            OnReceiveData(from, data);
+            OnReceiveData(event.from, event.data);
         });
 
         m_Acceptor.SetCallback([this](auto ec, auto connection)
         {
             std::println("New connection!");
+            
             auto id = m_MonotonicClientId;
             m_MonotonicClientId++;
 

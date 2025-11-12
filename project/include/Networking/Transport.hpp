@@ -11,10 +11,17 @@
 namespace Networking
 {
 
+struct ReceiveEvent
+{
+    std::error_code errorCode;
+    asio::ip::udp::endpoint from;
+    Buffer& data;
+};
+
 class Transport
 {
 public:
-    using ReceiveCallback = std::function<void(asio::error_code, const asio::ip::udp::endpoint&, Buffer&)>; 
+    using ReceiveCallback = std::function<void(const ReceiveEvent&)>; 
 
     Transport(asio::io_context& context)
         : m_Socket(context)
@@ -113,7 +120,15 @@ public:
                 else if(bytesWritten > 0)
                 {
                     m_ReceiveBuffer.SetSize(bytesWritten);
-                    m_ReceiveCallback(error, m_RemoteEndpoint, m_ReceiveBuffer);
+
+                    ReceiveEvent event
+                    {
+                        .errorCode = error,
+                        .from = m_RemoteEndpoint,
+                        .data = m_ReceiveBuffer
+                    };
+
+                    m_ReceiveCallback(event);
                 }
 
                 ScheduleReceive();
