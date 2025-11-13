@@ -66,12 +66,16 @@ public:
         case MessageType::CHALLENGE:
         {
             if(m_State == State::SentConnectionRequest)
+            {
                 HandleChallengeMessage(data);
+            }
         } break;
         case MessageType::CONNECTION_ACCEPTED:
         {
             if(m_State == State::SentChallengeResponse)
+            {
                 ConnectionAccepted();
+            }
         } break;
         }
     }
@@ -101,8 +105,8 @@ private:
             m_State = State::SentChallengeResponse;
             m_LastSend = std::chrono::steady_clock::now();
         });
+        
         m_ResendCount = 0;
-
     }
 
     void ConnectionAccepted()

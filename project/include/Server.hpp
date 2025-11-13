@@ -38,10 +38,10 @@ public:
     
     void SendHello(ClientId id)
     {
-        auto buffer = Buffer::CreateShared(sizeof(uint32_t) + 5);
+        const std::string message = "Hello";
+        auto buffer = Buffer::CreateShared(sizeof(uint32_t) + message.length());
         StreamWriter serializer(*buffer);
 
-        const std::string message = "Hello";
         serializer.Write(message);
 
         SendReliable(id, buffer);

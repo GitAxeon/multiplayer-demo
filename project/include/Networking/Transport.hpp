@@ -13,9 +13,9 @@ namespace Networking
 
 struct ReceiveEvent
 {
-    std::error_code errorCode;
     asio::ip::udp::endpoint from;
     Buffer& data;
+    std::error_code errorCode;
 };
 
 class Transport
@@ -123,9 +123,9 @@ public:
 
                     ReceiveEvent event
                     {
-                        .errorCode = error,
                         .from = m_RemoteEndpoint,
-                        .data = m_ReceiveBuffer
+                        .data = m_ReceiveBuffer,
+                        .errorCode = error
                     };
 
                     m_ReceiveCallback(event);
