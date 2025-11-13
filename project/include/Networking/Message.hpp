@@ -17,6 +17,7 @@ inline uint64_t TimeAsMilliseconds()
 Client->Server: CONNECTION_REQUEST
 Server->Client: CHALLENGE 
 Client->Server: CHALLENGE_RESPONSE
+Server->Client: CONNECTION_ACCEPTED 
 
 */
 

@@ -2,16 +2,14 @@
 
 #include <cstdint>
 #include <memory>
-#include <stdexcept>
 #include <bit>
 #include <algorithm>
-#include <print>
 
 namespace Networking
 {
 
 // On little endian platforms std::copy, big endian platforms std::reverse_copy
-void XCopy(const std::byte* source, std::byte* destination, std::size_t count)
+inline void XCopy(const std::byte* source, std::byte* destination, std::size_t count)
 {
     if constexpr (std::endian::native == std::endian::little)
     {

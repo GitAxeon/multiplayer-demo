@@ -3,11 +3,11 @@
 #include <functional>
 #include <print>
 
-#include "NetworkBuffer.hpp"
+#include "Buffer.hpp"
+#include "Message.hpp"
 #include "Transport.hpp"
 #include "Connection.hpp"
-
-#include "AsioFormat.hpp"
+#include "../Random.hpp"
 
 namespace Networking
 {
@@ -77,6 +77,8 @@ public:
                 ConnectionAccepted();
             }
         } break;
+        default:
+            break;
         }
     }
 
@@ -130,7 +132,7 @@ private:
         StreamWriter serializer(*buffer);
         serializer.Write(header);
 
-        m_Transport.Send(buffer, m_Endpoint, std::forward<Handler>(handler));
+        m_Transport.get().Send(buffer, m_Endpoint, std::forward<Handler>(handler));
     }
 
     template<typename Handler>
@@ -148,7 +150,7 @@ private:
         serializer.Write(header);
         serializer.Write(m_ServerChallenge);
 
-        m_Transport.Send(buffer, m_Endpoint, std::forward<Handler>(handler));
+        m_Transport.get().Send(buffer, m_Endpoint, std::forward<Handler>(handler));
     }
     
     void ScheduleResend()
@@ -203,6 +205,8 @@ private:
                 });
                 
             } break;
+            default:
+                break;
             }
             
             ScheduleResend();
@@ -220,7 +224,7 @@ private:
     };
 
 private:
-    Transport& m_Transport;
+    std::reference_wrapper<Transport> m_Transport;
     asio::ip::udp::endpoint m_Endpoint;
     
     ConnectCallback m_ConnectCallback;

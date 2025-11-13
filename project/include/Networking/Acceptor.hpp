@@ -6,7 +6,8 @@
 
 #include "Transport.hpp"
 #include "Connection.hpp"
-#include "Random.hpp"
+#include "Message.hpp"
+#include "../Random.hpp"
 
 namespace Networking
 {
@@ -70,6 +71,8 @@ public:
             {
 
             } break;
+            default:
+                break;
         }
     }
 
@@ -269,7 +272,7 @@ public:
         serializer.Write(header);
         serializer.Write(clientIterator->second.challenge);
 
-        m_Transport.Send(buffer, endpoint, [endpoint](asio::error_code ec, std::size_t length)
+        m_Transport.get().Send(buffer, endpoint, [endpoint](asio::error_code ec, std::size_t length)
         {
             std::println("Sent challenge to {}", endpoint);
         });
@@ -297,8 +300,10 @@ public:
     }
 
 private:
-    asio::io_context& m_Context;
-    Transport& m_Transport;
+    std::reference_wrapper<asio::io_context> m_Context;
+    std::reference_wrapper<Transport> m_Transport;
+    // asio::io_context& m_Context;
+    // Transport& m_Transport;
 
     std::unordered_map<asio::ip::udp::endpoint, PendingClient> m_PendingConnections;
     asio::steady_timer m_ChallengeTimer;
