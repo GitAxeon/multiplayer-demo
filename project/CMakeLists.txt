@@ -55,7 +55,8 @@ FetchContent_Declare(asio_fetch
 FetchContent_MakeAvailable(asio_fetch)
 
 add_library(asio INTERFACE)
-target_include_directories(asio INTERFACE ${asio_fetch_SOURCE_DIR}/asio/include/)
+add_library(asio::asio ALIAS asio)
+target_include_directories(asio INTERFACE ${asio_fetch_SOURCE_DIR}/include)
 
 FetchContent_Declare(
   yaml-cpp
@@ -68,8 +69,14 @@ file(GLOB_RECURSE SourceFiles CONFIGURE_DEPENDS
 )
 
 add_executable(Application ${SourceFiles})
-target_link_libraries(Application PRIVATE SDL3::SDL3 imgui stb glm::glm asio yaml-cpp::yaml-cpp)
+target_link_libraries(Application PRIVATE SDL3::SDL3 imgui stb glm::glm asio::asio yaml-cpp::yaml-cpp)
 target_include_directories(Application PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+set_target_properties(
+    Application PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
 
 add_custom_command(TARGET Application POST_BUILD
    # Copy runtime deps

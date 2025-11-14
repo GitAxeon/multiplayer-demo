@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string_view>
 #include <format>
 
 #include <asio/ip/udp.hpp>
