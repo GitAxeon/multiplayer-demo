@@ -5,7 +5,7 @@
 
 #include <asio.hpp>
 
-#include "AsioFormat.hpp"
+#include "AsioFormat.hpp" // IWYU pragma: keep
 #include "Buffer.hpp"
 
 namespace Networking

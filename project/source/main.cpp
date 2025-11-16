@@ -16,12 +16,9 @@
 
 #include "CommandlineArguments.hpp"
 #include "Keyboard.hpp"
-#include "Networking/Networking.hpp"
 
 #include "Client.hpp"
 #include "Server.hpp"
-
-#include "Networking/Buffer.hpp"
 
 SDL_Texture* LoadTexture(SDL_Renderer* renderer, const std::string& path)
 {
@@ -83,7 +80,7 @@ int main(int argc, char* argv[])
     using Clock = std::chrono::steady_clock;
     using Timepoint = Clock::time_point;
 
-    Frame3::CommandlineArguments argumenets(argc, argv);
+    Frame3::CommandlineArguments arguments(argc, argv);
 
     SDL_Window* window = SDL_CreateWindow("Some application", 1024, 768, 0);
     SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);

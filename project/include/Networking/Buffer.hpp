@@ -4,6 +4,7 @@
 #include <memory>
 #include <bit>
 #include <algorithm>
+#include <string>
 
 namespace Networking
 {
