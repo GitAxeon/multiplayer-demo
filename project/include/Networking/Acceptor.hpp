@@ -67,10 +67,6 @@ public:
             {
                 HandleChallengeResponse(from, buffer);
             } break;
-            case ACKNOWLEDGE:
-            {
-
-            } break;
             default:
                 break;
         }
@@ -302,8 +298,6 @@ public:
 private:
     std::reference_wrapper<asio::io_context> m_Context;
     std::reference_wrapper<Transport> m_Transport;
-    // asio::io_context& m_Context;
-    // Transport& m_Transport;
 
     std::unordered_map<asio::ip::udp::endpoint, PendingClient> m_PendingConnections;
     asio::steady_timer m_ChallengeTimer;
