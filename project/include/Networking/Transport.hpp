@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <print>
+#include <queue>
 
 #include <asio.hpp>
 
@@ -21,7 +22,8 @@ struct ReceiveEvent
 class Transport
 {
 public:
-    using ReceiveCallback = std::function<void(const ReceiveEvent&)>; 
+    using SendHandler = std::function<void(asio::error_code, std::size_t)>;
+    using ReceiveHandler = std::function<void(const ReceiveEvent&)>; 
 
     Transport(asio::io_context& context)
         : m_Socket(context)
@@ -44,9 +46,9 @@ public:
         return m_Socket.local_endpoint();
     }
 
-    void SetReceiveCallback(ReceiveCallback callback)
+    void SetReceiveHandler(ReceiveHandler handler)
     {
-        m_ReceiveCallback = callback;
+        m_ReceiveHandler = handler;
     }
 
     bool Bind(const asio::ip::udp::endpoint& endpoint)
@@ -83,23 +85,33 @@ public:
         return true;
     }
 
+    std::size_t QueueLength() const { return m_SendQueue.size(); }
+
     void Send(std::shared_ptr<Buffer> buffer, const asio::ip::udp::endpoint& endpoint)
     {
-        m_Socket.async_send_to(asio::buffer(buffer->Data(), buffer->Size()), endpoint, [buffer, endpoint](asio::error_code ec, std::size_t length)
+        m_SendQueue.emplace(buffer, endpoint, [buffer, endpoint](asio::error_code ec, std::size_t length)
         {
             if(ec)
                 std::println("Send failed for {}: {}", endpoint, ec.message());
         });
+
+        if(!m_Sending)
+            ProcessNextSend();
     }
 
     template<typename Handler>
     void Send(std::shared_ptr<Buffer> buffer, const asio::ip::udp::endpoint& endpoint, Handler&& handler)
     {
-        m_Socket.async_send_to(asio::buffer(buffer->Data(), buffer->Size()), endpoint, 
-        [buffer, callback = std::forward<Handler>(handler)](asio::error_code ec, std::size_t length) mutable
-        {
-            callback(ec, length);
-        });
+        m_SendQueue.emplace(buffer, endpoint, std::forward<Handler>(handler));
+        
+        if(!m_Sending)
+            ProcessNextSend();
+
+        // m_Socket.async_send_to(asio::buffer(buffer->Data(), buffer->Size()), endpoint, 
+        // [buffer, callback = std::forward<Handler>(handler)](asio::error_code ec, std::size_t length) mutable
+        // {
+        //     callback(ec, length);
+        // });
     }
 
     void ScheduleReceive()
@@ -128,17 +140,52 @@ public:
                         .errorCode = error
                     };
 
-                    m_ReceiveCallback(event);
+                    m_ReceiveHandler(event);
                 }
 
                 ScheduleReceive();
             }
         );
     }
-    
+
 private:
+    void ProcessNextSend()
+    {
+        if(m_SendQueue.empty())
+        {
+            m_Sending = false;
+            return;
+        }
+
+        m_Sending = true;
+
+        auto& pending = m_SendQueue.front();
+        asio::const_buffer constBuffer(pending.buffer->Data(), pending.buffer->Size());
+        auto handler = pending.handler;
+
+        m_Socket.async_send_to(constBuffer, pending.endpoint, 
+        [this, handler, buff=pending.buffer](asio::error_code ec, std::size_t bytes)
+        {
+            handler(ec, bytes);
+            m_SendQueue.pop();
+
+            ProcessNextSend(); 
+        });
+    }
+
+private:
+    struct PendingSend
+    {
+        std::shared_ptr<Buffer> buffer;
+        asio::ip::udp::endpoint endpoint;
+        SendHandler handler;
+    };
+
     asio::ip::udp::socket m_Socket;
-    ReceiveCallback m_ReceiveCallback;
+    ReceiveHandler m_ReceiveHandler;
+
+    std::queue<PendingSend> m_SendQueue;
+    bool m_Sending = false;
 
     // Used when receiving data
     Buffer m_ReceiveBuffer{512};

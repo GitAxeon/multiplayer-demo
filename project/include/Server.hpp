@@ -18,7 +18,7 @@ public:
     {
         std::println("Server created");
 
-        m_Transport.SetReceiveCallback([this](auto& event) -> void
+        m_Transport.SetReceiveHandler([this](auto& event) -> void
         {
             OnReceiveData(event.from, event.data);
         });
