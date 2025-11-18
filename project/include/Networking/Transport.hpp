@@ -23,7 +23,7 @@ class Transport
 {
 public:
     using SendHandler = std::function<void(asio::error_code, std::size_t)>;
-    using ReceiveHandler = std::function<void(const ReceiveEvent&)>; 
+    using ReceiveHandler = std::function<void(const ReceiveEvent&)>;
 
     Transport(asio::io_context& context)
         : m_Socket(context)
@@ -106,12 +106,6 @@ public:
         
         if(!m_Sending)
             ProcessNextSend();
-
-        // m_Socket.async_send_to(asio::buffer(buffer->Data(), buffer->Size()), endpoint, 
-        // [buffer, callback = std::forward<Handler>(handler)](asio::error_code ec, std::size_t length) mutable
-        // {
-        //     callback(ec, length);
-        // });
     }
 
     void ScheduleReceive()
