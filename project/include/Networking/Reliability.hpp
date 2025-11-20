@@ -70,8 +70,7 @@ public:
     {
         bool isNew = m_Sequencer.RecordIncomingSequence(remoteSequence);
         
-        if(!isNew)
-            return false;
+        if(!isNew) { return false; }
 
         UpdateResendBuffer(remoteSequence, acknowledgeBits);
 

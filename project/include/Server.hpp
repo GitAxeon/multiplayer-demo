@@ -167,8 +167,7 @@ public:
 
             auto clientIterator = m_Clients.find(header.clientId);
             
-            if(clientIterator == m_Clients.end())
-                return;
+            if(clientIterator == m_Clients.end()) { return; }
             
             std::println("Disconnect received from {}", header.clientId);
             m_Clients.erase(clientIterator);
@@ -178,13 +177,9 @@ public:
 
     void Stop()
     {
-        if(!m_Context.stopped())
-        {
-            m_Context.stop();
-        }
+        if(!m_Context.stopped()) { m_Context.stop(); }
         
-        if(m_NetworkThread.joinable())
-            m_NetworkThread.join();
+        if(m_NetworkThread.joinable()) { m_NetworkThread.join(); }
         
         std::println("UDPServer stopped");
     }
@@ -226,8 +221,7 @@ public:
     {
         auto clientIterator = m_Clients.find(id);
 
-        if(clientIterator == m_Clients.end())
-            return;
+        if(clientIterator == m_Clients.end()) { return; }
 
         Header header = CreateReliableHeader(id, *(clientIterator->second));
 
@@ -259,8 +253,7 @@ private:
         m_ResendTimer.expires_after(31ms);
         m_ResendTimer.async_wait([&](std::error_code ec)
         {
-            if(ec == asio::error::operation_aborted)
-                return; // Timer cancelled apparently >:(
+            if(ec == asio::error::operation_aborted) { return; }
 
             auto now = std::chrono::steady_clock::now();
 

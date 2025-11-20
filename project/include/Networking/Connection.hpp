@@ -62,8 +62,7 @@ public:
     {
         m_Transport.get().Send(buffer, m_Endpoint,[this](asio::error_code ec, auto)
         {
-            if(!ec)
-                m_LastMessageTime = Clock::now();
+            if(!ec) m_LastMessageTime = Clock::now();
         });
     }
 
@@ -89,10 +88,7 @@ public:
     {
         auto result = m_Reliability.AddMessage(buffer);
 
-        if(!result)
-        {
-            return;
-        }
+        if(!result) return;
         
         Send(buffer, [this, sequence = result.value()](asio::error_code ec, std::size_t length)
         {

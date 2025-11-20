@@ -58,10 +58,7 @@ public:
     void Clear() { m_Size = 0; }
     bool SetSize(std::size_t size)
     {
-        if(size > m_Capacity)
-        {
-            return false;
-        }
+        if(size > m_Capacity) { return false; }
 
         m_Size = size;
         return true;
@@ -73,10 +70,7 @@ public:
     template<TriviallyCopyable T>
     bool Read(T& destination, std::size_t position) const
     {
-        if(position + sizeof(T) > m_Size)
-        {
-            return false;
-        }
+        if(position + sizeof(T) > m_Size) { return false; }
 
         XCopy(m_Data.get() + position, reinterpret_cast<std::byte*>(&destination), sizeof(T));
         return true;
@@ -87,10 +81,7 @@ public:
     {
         const auto byteCount = sizeof(T) * count;
 
-        if((position + byteCount) > m_Size)
-        {
-            return false;
-        }
+        if((position + byteCount) > m_Size) { return false; }
 
         XCopy(m_Data.get() + position, reinterpret_cast<std::byte*>(destination), byteCount);
         return true;
@@ -101,15 +92,11 @@ public:
     {
         const auto end = position + sizeof(T);
 
-        if(end > m_Capacity)
-        {
-            return false;
-        }
+        if(end > m_Capacity) { return false; }
 
         XCopy(reinterpret_cast<const std::byte*>(&value), m_Data.get() + position, sizeof(T));
 
-        if(end > m_Size)
-            m_Size = end;
+        if(end > m_Size) { m_Size = end; }
 
         return true;
     }
@@ -120,15 +107,11 @@ public:
         const auto byteCount = sizeof(T) * count;
         const auto end = position + byteCount;
 
-        if(end > m_Capacity)
-        {
-            return false;
-        }
+        if(end > m_Capacity) { return false; }
 
         XCopy(reinterpret_cast<const std::byte*>(source), m_Data.get() + position, byteCount);
 
-        if(end > m_Size)
-            m_Size = end;
+        if(end > m_Size) { m_Size = end; }
 
         return true;
     }
@@ -174,10 +157,7 @@ private:
     template<typename T>
     bool ReadTrivial(T& destination)
     {
-        if(!m_Buffer.Read<T>(destination, m_Position))
-        {
-            return false;
-        }
+        if(!m_Buffer.Read<T>(destination, m_Position)) { return false; }
         
         m_Position += sizeof(T);
         return true;
@@ -193,18 +173,15 @@ private:
     {
         uint32_t length{0};
         
-        if(!Read(length))
-            return false;
+        if(!Read(length)) { return false; }
         
-        if(length == 0)
-            return true;
+        if(length == 0) { return true; }
         
         destination.resize(length);
 
         bool result = m_Buffer.ReadN(destination.data(), m_Position, length);
 
-        if(result)
-            m_Position += static_cast<std::size_t>(length);
+        if(result) { m_Position += static_cast<std::size_t>(length); }
 
         return result;
     }
@@ -250,16 +227,13 @@ private:
     {   
         const uint32_t length = static_cast<uint32_t>(source.size());
 
-        if(!Write(length))
-            return false;
+        if(!Write(length)) { return false; }
         
-        if(length == 0)
-            return true;
+        if(length == 0) { return true; }
 
         bool result = m_Buffer.WriteN(source.data(), m_Position, source.length());
 
-        if(result)
-            m_Position += static_cast<std::size_t>(length);
+        if(result) { m_Position += static_cast<std::size_t>(length); }
 
         return result;
     }
@@ -269,13 +243,11 @@ private:
     {
         const uint32_t length = static_cast<uint32_t>(source.Size());
         
-        if(length == 0)
-            return true;
+        if(length == 0) { return true; }
         
         bool result = m_Buffer.WriteN(source.Data(), m_Position, source.Size());
 
-        if(result)
-            m_Position += static_cast<std::size_t>(length);
+        if(result) { m_Position += static_cast<std::size_t>(length); }
 
         return result;
     }
