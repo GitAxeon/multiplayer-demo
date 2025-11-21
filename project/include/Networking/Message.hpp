@@ -27,7 +27,6 @@ enum class MessageType : uint8_t
     CHALLENGE,
     CHALLENGE_RESPONSE,
     CONNECTION_ACCEPTED,
-    WELCOME,
     MESSAGE,
     ACKNOWLEDGE,
     DISCONNECT
