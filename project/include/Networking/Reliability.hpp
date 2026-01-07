@@ -24,12 +24,18 @@ struct ReliableMessage
 class ReliabilityLayer
 {
 public:
+    std::size_t PendingReliableMessageCount() const
+    {
+        return m_ResendBuffer.size();
+    }
+
     PacketSequencer& GetPacketSequencer() { return m_Sequencer; }
+    const PacketSequencer& GetPacketSequencer() const { return m_Sequencer; }
     
     // Return sequence of the message if added succesfully
     std::optional<uint32_t> AddMessage(std::shared_ptr<Buffer> buffer)
     {
-        const auto sequence = m_Sequencer.CurrentSequence();
+        const auto sequence = m_Sequencer.LocalSequence();
         auto [it, inserted] = m_ResendBuffer.try_emplace
         (
             sequence, // Key

@@ -8,6 +8,22 @@ namespace Networking
 class PacketSequencer
 {
 public:
+
+    uint32_t LocalSequence() const
+    {
+        return m_SequenceNumber;
+    }
+    
+    uint32_t RemoteSequence() const
+    {
+        return m_RemoteSequenceNumber;
+    }
+
+    uint32_t AcknowledgeBits() const 
+    {
+        return m_AcknowledgeBits;
+    }
+    
     void SetSequence(uint32_t value)
     {
         m_SequenceNumber = value;
@@ -18,24 +34,9 @@ public:
         m_RemoteSequenceNumber = value;
     }
 
-    uint32_t CurrentSequence() const
-    {
-        return m_SequenceNumber;
-    }
-    
     uint32_t ObtainNewSequence()
     {
         return m_SequenceNumber++;
-    }
-
-    uint32_t RemoteSequence() const
-    {
-        return m_RemoteSequenceNumber;
-    }
-
-    uint32_t AcknowledgeBits() const 
-    {
-        return m_AcknowledgeBits;
     }
 
     // Returns true if packet is new ie. not a duplicate

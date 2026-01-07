@@ -39,12 +39,15 @@ public:
     void SendHello(ClientId id)
     {
         const std::string message = "Hello";
+
         auto buffer = Buffer::CreateShared(sizeof(uint32_t) + message.length());
         StreamWriter serializer(*buffer);
-
         serializer.Write(message);
 
-        SendReliable(id, buffer);
+        if(auto it = m_Clients.find(id); it != m_Clients.end())
+        {
+            it->second->Send(buffer->View());
+        }
     }
 
     ~Server()
@@ -76,7 +79,7 @@ public:
                 m_Transport.LocalEndpoint()
             );
 
-            // ScheduleHeartbeat();
+            ScheduleHeartbeat();
             ScheduleResend();
 
             m_NetworkThread = std::thread([this]()
@@ -137,7 +140,7 @@ public:
         if(header.flags & UDP_Reliable)
         {
             auto clientIt = m_Clients.find(header.clientId);
-            bool isNew = clientIt->second->HandleIncoming(header.sequence, header.acknowledged, header.acknowledgeBits);
+            const bool isNew = clientIt->second->HandleIncoming(header.sequence, header.acknowledged, header.acknowledgeBits);
             
             if(!isNew)
                 return;
@@ -186,52 +189,33 @@ public:
 
     void Broadcast(const std::string& message, bool reliable = false)
     {
-        Header header;
-        header.messageType = MessageType::MESSAGE;
-        header.flags = !reliable ? UDP_Unreliable  : UDP_Reliable;
-        header.timestamp = TimeAsMilliseconds();
-
         for(auto& [id, client] : m_Clients)
-        {
-            auto& reliability = client->GetReliabilityLayer().GetPacketSequencer();
-
-            header.clientId = id;
-            header.sequence = reliability.ObtainNewSequence();
-            header.acknowledged = reliability.RemoteSequence();
-            header.acknowledgeBits = reliability.AcknowledgeBits();
-            
-            auto buffer = Buffer::CreateShared(sizeof(Header) + sizeof(std::size_t) + message.length());
-
+        {   
+            auto buffer = Buffer::CreateUnique(sizeof(std::uint32_t) + message.length());
             StreamWriter serializer(*buffer);
-            serializer.Write(header);
             serializer.Write(message);
 
             if(!reliable)
             {
-                client->Send(buffer);
+                client->Send(std::span<const std::byte>{buffer->Data(), buffer->Size()});
             }
             else
             {
-                client->SendReliable(buffer);
+                client->SendReliable(std::span<const std::byte>{buffer->Data(), buffer->Size()});
             }
         }
     }
 
     void SendReliable(ClientId id, std::shared_ptr<Buffer> packet)
     {
-        auto clientIterator = m_Clients.find(id);
-
-        if(clientIterator == m_Clients.end()) { return; }
-
-        Header header = CreateReliableHeader(id, *(clientIterator->second));
+        auto it = m_Clients.find(id);
+        if(it == m_Clients.end()) { return; }
 
         auto packetWithHeader = Buffer::CreateShared(sizeof(Header) + packet->Size());
-        
         StreamWriter serializer(*packetWithHeader);
-        serializer.Write(header);
         serializer.Write(*packet);
 
-        clientIterator->second->SendReliable(packetWithHeader);
+        it->second->SendReliable(packetWithHeader->View());
     }
 
 private:
@@ -241,7 +225,13 @@ private:
         m_HeartbeatTimer.expires_after(1s);
         m_HeartbeatTimer.async_wait([&](std::error_code ec)
         {
-            std::println("Could send heartbeat here?");
+            std::println("Sending heartbeat to all clients");
+
+            for(auto it : m_Clients)
+            {
+                it.second->SendHeartbeat();
+            }
+
             ScheduleHeartbeat();
         });
     }
@@ -265,22 +255,6 @@ private:
 
             ScheduleResend();
         });
-    }
-
-    Header CreateReliableHeader(ClientId id, Connection& client)
-    {
-        Header header;
-        header.clientId = id;
-        header.messageType = MessageType::MESSAGE;
-        header.flags = UDP_Reliable;
-        header.timestamp = TimeAsMilliseconds();
-
-        auto& sequencer = client.GetReliabilityLayer().GetPacketSequencer();
-        header.sequence = sequencer.ObtainNewSequence();
-        header.acknowledged = sequencer.RemoteSequence();
-        header.acknowledgeBits = sequencer.AcknowledgeBits();
-
-        return header;
     }
 
 private:

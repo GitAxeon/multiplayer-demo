@@ -82,6 +82,11 @@ public:
         }
     }
 
+    asio::ip::udp::endpoint GetRemoteEndpoint() const
+    {
+        return m_Endpoint;
+    }
+    
 private:
     void HandleChallengeMessage(Buffer& data)
     {

@@ -41,11 +41,11 @@ public:
     Transport(Transport&&) = default;
     Transport& operator=(Transport&&) = default;
 
-    asio::ip::udp::endpoint LocalEndpoint()
+    asio::ip::udp::endpoint LocalEndpoint() const
     {
         return m_Socket.local_endpoint();
     }
-
+    
     void SetReceiveHandler(ReceiveHandler handler)
     {
         m_ReceiveHandler = handler;
@@ -184,7 +184,6 @@ private:
     // Used when receiving data
     Buffer m_ReceiveBuffer{512};
     asio::ip::udp::endpoint m_RemoteEndpoint;
-    
 };
 
 }

@@ -3,6 +3,8 @@
 #include <chrono>
 #include <cstdint>
 
+#include "Buffer.hpp"
+
 namespace Networking
 {
 
@@ -27,6 +29,7 @@ enum class MessageType : uint8_t
     CHALLENGE,
     CHALLENGE_RESPONSE,
     CONNECTION_ACCEPTED,
+    HEARTBEAT,
     MESSAGE,
     ACKNOWLEDGE,
     DISCONNECT
@@ -34,24 +37,61 @@ enum class MessageType : uint8_t
 
 inline static uint32_t sProtocol {88173283U};
 
-using UDPFlag = uint8_t;
+using UDPFlag = std::uint8_t;
 
 constexpr UDPFlag UDP_Unreliable = 1 << 0;
 constexpr UDPFlag UDP_Reliable = 1 << 1;
 constexpr UDPFlag UDP_OrderedReliable = 1 << 2;
 
-using ClientId = uint8_t;
+enum class Reliable : std::uint8_t
+{
+    Unreliable,
+    Reliable
+};
+
+using ClientId = std::uint8_t;
 
 struct Header
 {
-    uint32_t protocol{sProtocol};
-    uint32_t sequence{0};
-    uint32_t acknowledged{0};
-    uint32_t acknowledgeBits{0};
-    uint64_t timestamp{0};
+    std::uint32_t protocol{sProtocol};
+    std::uint32_t sequence{0};
+    std::uint32_t acknowledged{0};
+    std::uint32_t acknowledgeBits{0};
+    std::uint64_t timestamp{0};
     UDPFlag flags{0};
     ClientId clientId{0};
     MessageType messageType;
 };
+
+bool Serialize(StreamWriter& serializer, const Header& header)
+{
+    serializer.Write(header.protocol);
+    serializer.Write(header.sequence);
+    serializer.Write(header.acknowledged);
+    serializer.Write(header.acknowledgeBits);
+    serializer.Write(header.timestamp);
+    serializer.Write(header.flags);
+    serializer.Write(header.clientId);
+    serializer.Write(static_cast<std::uint8_t>(header.messageType));
+
+    return serializer.Ok();
+}
+
+bool Deserialize(StreamReader& deserializer, Header& header)
+{
+    deserializer.Read(header.protocol);
+    deserializer.Read(header.sequence);
+    deserializer.Read(header.acknowledged);
+    deserializer.Read(header.acknowledgeBits);
+    deserializer.Read(header.timestamp);
+    deserializer.Read(header.flags);
+    deserializer.Read(header.clientId);
+
+    std::uint8_t messageType = 0;
+    deserializer.Read(messageType);
+    header.messageType = static_cast<MessageType>(messageType);
+
+    return deserializer.Ok();
+}
 
 }

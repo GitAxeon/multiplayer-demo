@@ -1,5 +1,6 @@
 #include <print>
 #include <chrono>
+#include <filesystem>
 
 // #include <SDKDDKVer.h>
 #include <asio.hpp>
@@ -20,21 +21,47 @@
 #include "Client.hpp"
 #include "Server.hpp"
 
-SDL_Texture* LoadTexture(SDL_Renderer* renderer, const std::string& path)
-{
-    int width = 0, height = 0, channels = 0;
-    auto pixels = stbi_load(path.c_str(), &width, &height, &channels, 4);
+#include "ImGui_Extension.hpp"
 
+namespace Paths
+{
+    // Path to the directory containing the executable
+    static std::filesystem::path Root;
+
+    static std::filesystem::path Resources() 
+    {
+        return Root / "resources";
+    }
+};
+
+SDL_Texture* LoadTexture(SDL_Renderer* renderer, const std::filesystem::path& path)
+{
+    const SDL_PixelFormat format = SDL_PIXELFORMAT_RGBA32;
+    const int desiredChannels = SDL_BYTESPERPIXEL(format);
+
+    const auto pathString = path.generic_string();
+
+    int width = 0, height = 0, channels = 0;
+    auto pixels = stbi_load(pathString.c_str(), &width, &height, &channels, desiredChannels);
+    
     if(!pixels)
     {
-        std::println("Failed to load \"{}\"", path);
+        std::println("Failed to load \"{}\"", pathString);
         return nullptr;
     }
-
+    
+    if(channels != desiredChannels)
+    {
+        std::println("Color channel count ({}) in {} doesn't match the expected value of {}", channels, pathString, desiredChannels);
+        stbi_image_free(pixels);
+        
+        return nullptr;
+    }
+    
     SDL_Texture* texture = SDL_CreateTexture
     (
         renderer,
-        SDL_PIXELFORMAT_RGBA32,
+        format,
         SDL_TEXTUREACCESS_STATIC,
         width,
         height
@@ -42,20 +69,20 @@ SDL_Texture* LoadTexture(SDL_Renderer* renderer, const std::string& path)
 
     if(!texture)
     {
-        std::println("SDL_CreateTexture failed when loading {}: {}", path, SDL_GetError());
+        std::println("SDL_CreateTexture failed when loading {}: {}", pathString, SDL_GetError());
         stbi_image_free(pixels);
 
         return nullptr;
     }
-
-    if(!SDL_UpdateTexture(texture, nullptr, static_cast<void*>(pixels), 4 * width))
+    
+    if(!SDL_UpdateTexture(texture, nullptr, static_cast<void*>(pixels), width * SDL_BYTESPERPIXEL(format)))
     {
-        std::println("SDL_UpdateTexture failed for {}: {}", path, SDL_GetError());
+        std::println("SDL_UpdateTexture failed for {}: {}", pathString, SDL_GetError());
     }
 
     if(!SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST))
     {
-        std::println("SDL_SetTextureScaleMode failed for {}: {}", path, SDL_GetError());
+        std::println("SDL_SetTextureScaleMode failed for {}: {}", pathString, SDL_GetError());
     }
 
     stbi_image_free(pixels);
@@ -82,6 +109,26 @@ int main(int argc, char* argv[])
 
     Frame3::CommandlineArguments arguments(argc, argv);
 
+    // +Resource path
+    auto rootDir = arguments.get(1);
+    if(!rootDir)
+    {
+        std::println("1.Pass the full path to the folder containing the executable as the first argument to the program.");
+        return 0;
+    }
+
+    Paths::Root = std::filesystem::path(*rootDir);
+    std::println("Project root: {}", Paths::Root.string());
+    
+    if(!std::filesystem::exists(Paths::Root) || !std::filesystem::is_directory(Paths::Root))
+    {
+        std::println("Path provided doesn't exist");
+        return 0;
+    }
+    
+    std::println("Resource path: {}", Paths::Resources().string());
+    // -Resource path
+
     SDL_Window* window = SDL_CreateWindow("Some application", 1024, 768, 0);
     SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
 
@@ -93,19 +140,19 @@ int main(int argc, char* argv[])
     ImGuiIO& imguiIO = ImGui::GetIO();
 
     glm::vec3 playerPosition(0, 0, 0);
-    SDL_Texture* texture = LoadTexture(renderer, "resources/Bro-0001.png");
+    SDL_Texture* texture = LoadTexture(renderer, Paths::Resources()/"Bro-0001.png");
     
     glm::vec3 grassPosition(0, 0, 0);
     glm::vec3 grassPosition2(16, 0, 0);
-    SDL_Texture* grassTexture = LoadTexture(renderer, "resources/Grass-0001.png");
+    SDL_Texture* grassTexture = LoadTexture(renderer, Paths::Resources()/"Grass-0001.png");
 
-    SDL_Texture* chainlinkFence = LoadTexture(renderer, "resources/Chainlink-0001.png");
+    SDL_Texture* chainlinkFence = LoadTexture(renderer, Paths::Resources()/"Chainlink-0001.png");
     glm::vec3 fencePosition(0, 0, 0);
 
-    SDL_Texture* house = LoadTexture(renderer, "resources/building-0001.png");
+    SDL_Texture* house = LoadTexture(renderer, Paths::Resources()/"building-0001.png");
     glm::vec3 housePosition(40, 0, 0);
 
-    SDL_Texture* building = LoadTexture(renderer, "resources/building-0002.png");
+    SDL_Texture* building = LoadTexture(renderer, Paths::Resources()/"building-0002.png");
     glm::vec3 buildingPosition(128, 0, 0); 
 
     glm::vec3 nativeResolution(320, 180, 0);
@@ -234,6 +281,31 @@ int main(int argc, char* argv[])
         if(showImGuiDemo)
             ImGui::ShowDemoWindow();
 
+        if(ImGui::Begin("ServerInfo"))
+        {
+
+        }
+        ImGui::End();
+
+        if(ImGui::Begin("ClientInfo"))
+        {
+            auto debugInfo = client->GetConnectionDebugInfo();
+            
+            if(!debugInfo)
+            {
+                ImGui::Text("Client offline");
+            }
+            else
+            {
+                ImGuiEx::TextFormat("Local sequence {}", (*debugInfo).localSequence);
+                ImGuiEx::TextFormat("Local sequence {}", (*debugInfo).remoteSequence);
+                ImGuiEx::TextFormat("Local sequence {}", (*debugInfo).acknowledgeBits);
+                // ImGui::Text("Local sequence: %d", (*debugInfo).localSequence);
+                // ImGui::Text("Remote sequence: %d", (*debugInfo).remoteSequence);
+                // ImGui::Text("Acknowledge bits: %d", (*debugInfo).acknowledgeBits);
+            }
+        }
+        ImGui::End();
 
         if(ImGui::Begin("Controls"))
         {
@@ -325,7 +397,7 @@ int main(int argc, char* argv[])
 
                             if(ImGui::Button("Send data"))
                             {
-                                client->Send("Hello?", false);
+                                client->Send("Hello?");
                             }
                         } break;
                         case OnlineStatus::Host:

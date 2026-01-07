@@ -2,6 +2,7 @@
 
 #include <thread>
 #include <print>
+#include <span>
 
 #include "Networking/Connector.hpp"
 
@@ -84,45 +85,86 @@ public:
         std::println("UDPClient disconnected.");
     }
 
-    bool Send(const std::string& message, bool reliable = false)
+    void Send(std::span<const std::byte> data)
     {
-        std::println("Attempting to send data to server.");
-
-        try
-        {
-            auto& sequencer = m_Connection.GetReliabilityLayer().GetPacketSequencer();
-            
-            Header header;
-            header.flags = !reliable ? UDP_Unreliable : UDP_Reliable;
-            header.sequence = sequencer.ObtainNewSequence();
-            header.acknowledged = sequencer.RemoteSequence();
-            header.acknowledgeBits = sequencer.AcknowledgeBits();
-            header.timestamp = TimeAsMilliseconds();
-
-            header.clientId = m_ClientId;
-            header.messageType = MessageType::MESSAGE;
-            
-            /* Create message containing data ie. serialize data */
-            auto buffer = Buffer::CreateShared(sizeof(Header) + sizeof(std::size_t) + message.size());
-
-            StreamWriter serializer(*buffer);
-            serializer.Write(header);
-            serializer.Write(message);
-
-            m_Connection.SendReliable(buffer);
-
-            return true;
-        }
-        catch(const std::exception& e)
-        {
-            std::println("[Error]:[UDPClient]: Send failed: {}", e.what());
-            return false;
-        }
+        m_Connection.Send(data);
     }
 
-    void Send(std::shared_ptr<Networking::Buffer> buffer)
+    void Send(const std::string& message)
     {
-        m_Connection.Send(buffer);
+        // The serializer only supports the custom buffer class so for the time being it's stack allocated
+        // Also I would love to streamline setting the size of the buffer
+        auto buffer = Buffer::CreateUnique(sizeof(std::uint32_t) + message.size());
+
+        StreamWriter serializer(*buffer);
+        serializer.Write(message);
+        
+        m_Connection.Send(std::span<const std::byte>{buffer->Data(), buffer->Size()});
+    }
+
+    // void Send(const std::string& message)
+    // {
+    //     auto buffer = Buffer::CreateShared(sizeof(std::uint32_t) + message.size());
+    //     StreamWriter serializer(*buffer);
+    //     serializer.Write(message);
+
+    //     m_Connection.Send(buffer);
+    // }
+
+
+    bool SendReliable()
+    {
+
+    }
+
+    // bool Send(const std::string& message, bool reliable = false)
+    // {
+    //     std::println("Attempting to send data to server.");
+
+    //     try
+    //     {
+    //         auto& sequencer = m_Connection.GetReliabilityLayer().GetPacketSequencer();
+            
+    //         Header header;
+    //         header.flags = !reliable ? UDP_Unreliable : UDP_Reliable;
+    //         header.sequence = sequencer.ObtainNewSequence();
+    //         header.acknowledged = sequencer.RemoteSequence();
+    //         header.acknowledgeBits = sequencer.AcknowledgeBits();
+    //         header.timestamp = TimeAsMilliseconds();
+
+    //         header.clientId = m_ClientId;
+    //         header.messageType = MessageType::MESSAGE;
+            
+    //         /* Create message containing data ie. serialize data */
+    //         auto buffer = Buffer::CreateShared(sizeof(Header) + sizeof(std::size_t) + message.size());
+
+    //         StreamWriter serializer(*buffer);
+    //         serializer.Write(header);
+    //         serializer.Write(message);
+
+    //         m_Connection.SendReliable(buffer);
+
+    //         return true;
+    //     }
+    //     catch(const std::exception& e)
+    //     {
+    //         std::println("[Error]:[UDPClient]: Send failed: {}", e.what());
+    //         return false;
+    //     }
+    // }
+
+    // void Send(std::shared_ptr<Networking::Buffer> buffer)
+    // {
+    //     m_Connection.Send(buffer);
+    // }
+
+    
+    std::optional<ConnectionDebugInfo> GetConnectionDebugInfo() const
+    {
+        if(!m_Connection.Alive())
+            return std::nullopt;
+            
+        return m_Connection.GetDebufInfo();
     }
 
 private:
@@ -158,9 +200,31 @@ private:
                 message
             );
         } break;
+        case MessageType::HEARTBEAT:
+        {
+            std::println("Heartbeat received from server. Replying with an acknowledgement");
+            
+            // auto& sequencer = m_Connection.GetReliabilityLayer().GetPacketSequencer();
+            
+            // Header header;
+            // header.flags = UDP_Reliable;
+            // header.sequence = sequencer.ObtainNewSequence();
+            // header.acknowledged = sequencer.RemoteSequence();
+            // header.acknowledgeBits = sequencer.AcknowledgeBits();
+            // header.timestamp = TimeAsMilliseconds();
+
+            // header.clientId = m_ClientId;
+            // header.messageType = MessageType::ACKNOWLEDGE;
+
+            // auto buffer = Buffer::CreateShared(sizeof(Header));
+
+            // StreamWriter serializer(*buffer);
+            // serializer.Write(header);
+
+            m_Connection.SendHeartbeat();
+        } break;
         }
     }
-private:
 
 private:
     asio::io_context m_Context;

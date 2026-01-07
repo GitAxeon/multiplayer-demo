@@ -197,10 +197,8 @@ public:
         
         m_PendingConnections.erase(connectionIterator);
 
-        SendConnectionAccepted(connection, [this, connection](auto, auto)
-        {
-            m_AcceptCallback({}, connection); 
-        });
+        connection->SendConnectionAccepted();
+        m_AcceptCallback({}, connection);
     }
 
     void ScheduleChallengeCheck()
@@ -274,26 +272,26 @@ public:
         });
     }
     
-    template<typename Handler>
-    void SendConnectionAccepted(std::shared_ptr<Connection> connection, Handler&& handler)
-    {
-        auto& sequencer = connection->GetReliabilityLayer().GetPacketSequencer();
+    // template<typename Handler>
+    // void SendConnectionAccepted(std::shared_ptr<Connection> connection, Handler&& handler)
+    // {
+    //     auto& sequencer = connection->GetReliabilityLayer().GetPacketSequencer();
         
-        Header header;
-        header.messageType = MessageType::CONNECTION_ACCEPTED;
-        header.sequence = sequencer.ObtainNewSequence();
-        header.acknowledged = sequencer.RemoteSequence();
-        header.acknowledgeBits = sequencer.AcknowledgeBits();
-        header.flags = UDP_Reliable;
-        header.timestamp = TimeAsMilliseconds();
+    //     Header header;
+    //     header.messageType = MessageType::CONNECTION_ACCEPTED;
+    //     header.sequence = sequencer.ObtainNewSequence();
+    //     header.acknowledged = sequencer.RemoteSequence();
+    //     header.acknowledgeBits = sequencer.AcknowledgeBits();
+    //     header.flags = UDP_Reliable;
+    //     header.timestamp = TimeAsMilliseconds();
         
-        auto buffer = Buffer::CreateShared(sizeof(Header));
+    //     auto buffer = Buffer::CreateShared(sizeof(Header));
 
-        StreamWriter serializer(*buffer);
-        serializer.Write(header);
+    //     StreamWriter serializer(*buffer);
+    //     serializer.Write(header);
  
-        connection->SendReliable(buffer, std::forward<Handler>(handler)); 
-    }
+    //     connection->SendReliable(buffer, std::forward<Handler>(handler)); 
+    // }
 
 private:
     std::reference_wrapper<asio::io_context> m_Context;

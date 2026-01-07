@@ -5,6 +5,7 @@
 #include <bit>
 #include <algorithm>
 #include <string>
+#include <span>
 
 namespace Networking
 {
@@ -31,8 +32,35 @@ inline void XCopy(const std::byte* source, std::byte* destination, std::size_t c
     }
 }
 
-template<typename T>
-concept TriviallyCopyable = std::is_trivially_copyable_v<T>;
+// template<typename T>
+// concept TriviallyCopyable = std::is_trivially_copyable_v<T>;
+
+template<typename T> struct network_trivial : std::false_type {};
+
+template<> struct network_trivial<std::byte> : std::true_type {};
+
+// Enable if needed - Use for text only, no numerical values
+// template<> struct NetworkTrivial<char> : std::true_type {};
+
+// Will use std::uint8_t for storage since the data isn't bit packed
+template<> struct network_trivial<bool> : std::true_type {};
+
+// Note: Possibly need to check for validity
+template<> struct network_trivial<float> : std::true_type {};
+template<> struct network_trivial<double> : std::true_type {};
+
+template<> struct network_trivial<std::uint8_t> : std::true_type {};
+template<> struct network_trivial<std::uint16_t> : std::true_type {};
+template<> struct network_trivial<std::uint32_t> : std::true_type {};
+template<> struct network_trivial<std::uint64_t> : std::true_type {};
+
+template<> struct network_trivial<std::int8_t> : std::true_type {};
+template<> struct network_trivial<std::int16_t> : std::true_type {};
+template<> struct network_trivial<std::int32_t> : std::true_type {};
+template<> struct network_trivial<std::int64_t> : std::true_type {};
+
+template<typename T> constexpr bool network_trivial_v = network_trivial<T>::value;
+template<typename T> concept NetworkTrivialType = network_trivial_v<T>;
 
 class Buffer
 {
@@ -64,10 +92,15 @@ public:
         return true;
     }
 
+    std::span<const std::byte> View() const
+    {
+        return std::span<const std::byte>(m_Data.get(), m_Size);
+    }
+
     std::byte* Data() { return m_Data.get(); }
     const std::byte* Data() const { return m_Data.get(); }
     
-    template<TriviallyCopyable T>
+    template<typename T>
     bool Read(T& destination, std::size_t position) const
     {
         if(position + sizeof(T) > m_Size) { return false; }
@@ -76,7 +109,7 @@ public:
         return true;
     }
 
-    template<TriviallyCopyable T>
+    template<typename T>
     bool ReadN(T* destination, std::size_t position, std::size_t count) const
     {
         const auto byteCount = sizeof(T) * count;
@@ -87,7 +120,7 @@ public:
         return true;
     }
 
-    template<TriviallyCopyable T>
+    template<typename T>
     bool Write(const T& value, std::size_t position)
     {
         const auto end = position + sizeof(T);
@@ -101,7 +134,7 @@ public:
         return true;
     }
 
-    template<TriviallyCopyable T>
+    template<typename T>
     bool WriteN(const T* source, std::size_t position, std::size_t count)
     {
         const auto byteCount = sizeof(T) * count;
@@ -135,8 +168,11 @@ public:
         return true;
     }
 
+    bool Ok() const { return m_Ok; }
+
 protected:
     std::size_t m_Position{0};
+    bool m_Ok{true};
 };
 
 class StreamReader : public StreamBase
@@ -147,10 +183,22 @@ public:
     template<typename T>
     bool Read(T& destination)
     {
-        if constexpr (TriviallyCopyable<T>)
-            return ReadTrivial(destination);
+        if(!m_Ok) 
+            return false;
+        
+        bool result = true;
+
+        if constexpr (NetworkTrivialType<T>)
+            result = ReadTrivial(destination);
         else 
-            return ReadNonTrivial(destination);
+            result = ReadNonTrivial(destination);
+        
+        if(!result)
+        {
+            m_Ok = false;
+        }
+
+        return result;
     }
 
 private:
@@ -163,11 +211,26 @@ private:
         return true;
     }
 
+    template<>
+    bool ReadTrivial(bool& destination)
+    {
+        std::uint8_t value = 0;
+
+        if(!m_Buffer.Read(value, m_Position)) { return false; }
+
+        // Note: Technically after read 'value' could be anything 
+        destination = value ? true : false;
+
+        m_Position += sizeof(std::uint8_t);
+        return true;
+    }
+
     template<typename T>
     bool ReadNonTrivial(T& destination)
     {
         return Deserialize(*this, destination);
     }
+
 private:
     bool ReadNonTrivial(std::string& destination)
     {
@@ -198,10 +261,21 @@ public:
     template<typename T>
     bool Write(const T& source)
     {
-        if constexpr(TriviallyCopyable<T>)
-            return WriteTrivial(source);
+        if(!m_Ok)
+            return false;
+        
+        bool result = true;
+        if constexpr(NetworkTrivialType<T>)
+            result = WriteTrivial(source);
         else
-            return WriteNonTrivial(source);
+            result = WriteNonTrivial(source);
+
+        if(!result)
+        {
+            m_Ok = false;
+        }
+
+        return result;
     }
 
 private:
@@ -217,15 +291,32 @@ private:
         return false;
     }
 
+    // Boolean written as a std::uint8_t
+    template<>
+    bool WriteTrivial(const bool& source)
+    {
+        std::uint8_t value = source ? 1 : 0;
+
+        if(m_Buffer.Write(value, m_Position))
+        {
+            m_Position += sizeof(std::uint8_t);
+            return true;
+        }
+
+        return false;
+    }
+
     template<typename T>
     bool WriteNonTrivial(const T& source)
     {
         return Serialize(*this, source);
     }
 
+    // std::string 
     bool WriteNonTrivial(const std::string& source)
-    {   
-        const uint32_t length = static_cast<uint32_t>(source.size());
+    {
+        // Reading the size as a fixed sized integer because it will be written to the buffer
+        const std::uint32_t length = static_cast<uint32_t>(source.size());
 
         if(!Write(length)) { return false; }
         
