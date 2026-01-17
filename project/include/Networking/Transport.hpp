@@ -7,7 +7,7 @@
 #include <asio.hpp>
 
 #include "AsioFormat.hpp" // IWYU pragma: keep
-#include "Buffer.hpp"
+#include "Serialization/Buffer.hpp"
 
 namespace Networking
 {
@@ -174,7 +174,8 @@ private:
         asio::ip::udp::endpoint endpoint;
         SendHandler handler;
     };
-
+    
+private:
     asio::ip::udp::socket m_Socket;
     ReceiveHandler m_ReceiveHandler;
 

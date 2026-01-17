@@ -3,9 +3,6 @@
 #include <functional>
 #include <print>
 
-#include "Buffer.hpp"
-#include "Message.hpp"
-#include "Transport.hpp"
 #include "Connection.hpp"
 #include "../Random.hpp"
 
@@ -16,7 +13,7 @@ namespace Networking
 class Connector
 {
 public:
-    using ConnectCallback = std::function<void(asio::error_code, Connection&&)>;
+    using ConnectCallback = std::function<void(asio::error_code, std::shared_ptr<Connection>)>;
 
     Connector(asio::io_context& context, Transport& transport)
         : m_Transport(transport), m_ResendTimer(context)
@@ -121,7 +118,8 @@ private:
         std::println("Connection established with server");
 
         m_State = State::Connected;
-        m_ConnectCallback({}, Connection(m_Transport, m_Endpoint, m_Sequence, m_RemoteSequence));
+        auto connection = Connection::Create(m_Transport.get(), m_Endpoint, m_Sequence, m_RemoteSequence);
+        m_ConnectCallback({}, connection);
     }
 
     template<typename Handler>

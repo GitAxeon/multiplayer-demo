@@ -1,9 +1,7 @@
 #pragma once
 
 #include <chrono>
-#include <cstdint>
 #include <functional>
-#include <span>
 
 #include <asio.hpp>
 
@@ -12,6 +10,7 @@
 #include "Sequencer.hpp"
 #include "Reliability.hpp"
 #include "ConnectionDebugInfo.hpp"
+#include "Serialization/Serialization.hpp"
 
 namespace Networking
 {
@@ -21,26 +20,31 @@ class Connection : public std::enable_shared_from_this<Connection>
 public:
     using Clock = std::chrono::steady_clock;
 
-    Connection(Transport& transport, const asio::ip::udp::endpoint& endpoint, uint32_t initialSequence, uint32_t initialRemoteSequence)
+    // Use this thanks
+    template<typename...Args>
+    static std::shared_ptr<Connection> Create(Args&&... args)
+    {
+        return std::make_shared<Connection>(std::forward<Args>(args)...);
+    }
+
+    Connection(Transport& transport, const asio::ip::udp::endpoint& endpoint, std::uint32_t initialSequence, std::uint32_t initialRemoteSequence)
         : m_Transport(transport), m_Endpoint(endpoint)
     {
         auto& sequencer = m_Reliability.GetPacketSequencer();
         sequencer.SetSequence(initialSequence);
         sequencer.SetRemoteSequence(initialRemoteSequence);
     }
-
-    Connection(Transport& transport)
-        : m_Transport(transport)
-    {}
-
+    
     // No copy
     Connection(const Connection&) = delete;
     Connection& operator=(const Connection&) = delete;
 
-    // Movable
-    Connection(Connection&&) = default;
-    Connection& operator=(Connection&&) = default;
-    
+    // No move
+    Connection(Connection&&) = delete;
+    Connection& operator=(Connection&&) = delete;
+
+    ~Connection() = default;
+
     Clock::time_point GetLastSendTime() const { return m_LastSendTime; }
     Clock::time_point GetReceiveTime() const { return m_LastReceiveTime; }
 
@@ -51,7 +55,6 @@ public:
 
     bool Alive() const { return m_Alive; }
 
-    // New api
     void Send(std::span<const std::byte> data)
     {
         if(data.size() > 512u)
@@ -59,19 +62,7 @@ public:
             std::println("Connection Send(span<const byte>): data should be split in to multiple packets here");
         }
 
-        auto& sequencer = m_Reliability.GetPacketSequencer();
-
-        const Header header
-        {
-            .sequence = sequencer.ObtainNewSequence(),
-            .acknowledged = sequencer.RemoteSequence(),
-            .acknowledgeBits = sequencer.AcknowledgeBits(),
-            .timestamp = TimeAsMilliseconds(),
-            .flags = UDP_Unreliable,
-            .clientId = 0,
-            .messageType = MessageType::MESSAGE
-        };
-
+        const auto header = CreateHeader(MessageType::MESSAGE, UDP_Unreliable);
         auto buffer = Buffer::CreateShared(sizeof(Header) + data.size());
         
         StreamWriter serializer(*buffer);
@@ -92,19 +83,7 @@ public:
             std::println("Connection Send(span<const byte>): data should be split in to multiple packets here");
         }
 
-        auto& sequencer = m_Reliability.GetPacketSequencer();
-
-        const Header header
-        {
-            .sequence = sequencer.ObtainNewSequence(),
-            .acknowledged = sequencer.RemoteSequence(),
-            .acknowledgeBits = sequencer.AcknowledgeBits(),
-            .timestamp = TimeAsMilliseconds(),
-            .flags = UDP_Unreliable,
-            .clientId = 0,
-            .messageType = MessageType::MESSAGE
-        };
-
+        const auto header = CreateHeader(MessageType::MESSAGE, UDP_Unreliable);
         auto buffer = Buffer::CreateShared(sizeof(Header) + data.size());
         
         StreamWriter serializer(*buffer);
@@ -129,19 +108,8 @@ public:
         {
             std::println("Connection Send(span<const byte>): data should be split in to multiple packets here");
         }
-
-        auto& sequencer = m_Reliability.GetPacketSequencer();
-
-        const Header header
-        {
-            .sequence = sequencer.ObtainNewSequence(),
-            .acknowledged = sequencer.RemoteSequence(),
-            .acknowledgeBits = sequencer.AcknowledgeBits(),
-            .timestamp = TimeAsMilliseconds(),
-            .flags = UDP_Reliable,
-            .clientId = 0,
-            .messageType = MessageType::MESSAGE
-        };
+        
+        const auto header = CreateHeader(MessageType::MESSAGE, UDP_Reliable);
 
         auto buffer = Buffer::CreateShared(sizeof(Header) + data.size());
         
@@ -172,20 +140,8 @@ public:
         {
             std::println("Connection Send(span<const byte>): data should be split in to multiple packets here");
         }
-
-        auto& sequencer = m_Reliability.GetPacketSequencer();
-
-        const Header header
-        {
-            .sequence = sequencer.ObtainNewSequence(),
-            .acknowledged = sequencer.RemoteSequence(),
-            .acknowledgeBits = sequencer.AcknowledgeBits(),
-            .timestamp = TimeAsMilliseconds(),
-            .flags = UDP_Reliable,
-            .clientId = 0,
-            .messageType = MessageType::MESSAGE
-        };
-
+        
+        const auto header = CreateHeader(MessageType::MESSAGE, UDP_Reliable);
         auto buffer = Buffer::CreateShared(sizeof(Header) + data.size());
         
         StreamWriter serializer(*buffer);
@@ -211,19 +167,8 @@ public:
 
     void SendHeartbeat()
     {
-        auto& sequencer = m_Reliability.GetPacketSequencer();
-
-        const Header header
-        {
-            .sequence = sequencer.ObtainNewSequence(),
-            .acknowledged = sequencer.RemoteSequence(),
-            .acknowledgeBits = sequencer.AcknowledgeBits(),
-            .timestamp = TimeAsMilliseconds(),
-            .flags = UDP_Reliable,
-            .clientId = 0,
-            .messageType = MessageType::HEARTBEAT
-        };
-
+        const auto header = CreateHeader(MessageType::HEARTBEAT, UDP_Reliable);
+        
         auto buffer = Buffer::CreateShared(sizeof(Header));
         
         StreamWriter serializer(*buffer);
@@ -246,22 +191,11 @@ public:
 
     void SendConnectionAccepted()
     {
-        auto& sequencer = m_Reliability.GetPacketSequencer();
-
-        const Header header
-        {
-            .sequence = sequencer.ObtainNewSequence(),
-            .acknowledged = sequencer.RemoteSequence(),
-            .acknowledgeBits = sequencer.AcknowledgeBits(),
-            .timestamp = TimeAsMilliseconds(),
-            .flags = UDP_Reliable,
-            .clientId = 0,
-            .messageType = MessageType::CONNECTION_ACCEPTED
-        };
-
-        auto buffer = Buffer::CreateShared(sizeof(Header));
+        const auto header = CreateHeader(MessageType::CONNECTION_ACCEPTED, UDP_Reliable);
         
+        auto buffer = Buffer::CreateShared(sizeof(Header));
         StreamWriter serializer(*buffer);
+
         serializer.Write(header);
 
         auto sequence = m_Reliability.AddMessage(buffer);
@@ -282,7 +216,6 @@ public:
             });    
         }
     }
-    //-New api
 
     // Note: The parameter 'now' currently serves no purpose really
     void Resend(std::chrono::steady_clock::time_point now)
@@ -313,7 +246,7 @@ public:
     {
         const auto now = Clock::now();
         
-        auto sequencer = m_Reliability.GetPacketSequencer();
+        const auto sequencer = m_Reliability.GetPacketSequencer();
         return 
         {
             .localEndpoint = m_Transport.get().LocalEndpoint(),
@@ -329,6 +262,23 @@ public:
             (
                 now - m_LastSendTime
             )
+        };
+    }
+
+private:
+    Header CreateHeader(MessageType type, UDPFlag flags)
+    {
+        auto& sequencer = m_Reliability.GetPacketSequencer();
+
+        return Header
+        {
+            .sequence = sequencer.ObtainNewSequence(),
+            .acknowledged = sequencer.RemoteSequence(),
+            .acknowledgeBits = sequencer.AcknowledgeBits(),
+            .timestamp = TimeAsMilliseconds(),
+            .flags = flags,
+            .clientId = 0,
+            .messageType = type
         };
     }
 

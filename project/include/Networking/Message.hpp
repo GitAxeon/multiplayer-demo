@@ -3,7 +3,7 @@
 #include <chrono>
 #include <cstdint>
 
-#include "Buffer.hpp"
+#include "Serialization/Serialization.hpp"
 
 namespace Networking
 {

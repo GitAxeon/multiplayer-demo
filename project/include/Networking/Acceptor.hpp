@@ -187,8 +187,8 @@ public:
         // Increment the local sequence for the next outgoing message
         connectionIterator->second.sequence += 1;
         
-        auto connection = std::make_shared<Connection>
-        (
+        auto connection = Connection::Create
+        (   
             m_Transport,
             connectionIterator->first,
             connectionIterator->second.sequence,

@@ -176,7 +176,7 @@ int main(int argc, char* argv[])
     OnlineStatus onlineStatus = OnlineStatus::Offline;
 
     bool showImGuiDemo = false;
-    int upscaleFactor = 6;
+    int upscaleFactor = 4;
 
     float walkingSpeed = 25.0f;
 
@@ -281,13 +281,7 @@ int main(int argc, char* argv[])
         if(showImGuiDemo)
             ImGui::ShowDemoWindow();
 
-        if(ImGui::Begin("ServerInfo"))
-        {
-
-        }
-        ImGui::End();
-
-        if(ImGui::Begin("ClientInfo"))
+        if(ImGui::Begin("ServerInfo") && onlineStatus == OnlineStatus::Host)
         {
             auto debugInfo = client->GetConnectionDebugInfo();
             
@@ -298,11 +292,25 @@ int main(int argc, char* argv[])
             else
             {
                 ImGuiEx::TextFormat("Local sequence {}", (*debugInfo).localSequence);
-                ImGuiEx::TextFormat("Local sequence {}", (*debugInfo).remoteSequence);
-                ImGuiEx::TextFormat("Local sequence {}", (*debugInfo).acknowledgeBits);
-                // ImGui::Text("Local sequence: %d", (*debugInfo).localSequence);
-                // ImGui::Text("Remote sequence: %d", (*debugInfo).remoteSequence);
-                // ImGui::Text("Acknowledge bits: %d", (*debugInfo).acknowledgeBits);
+                ImGuiEx::TextFormat("Remote sequence {}", (*debugInfo).remoteSequence);
+                ImGuiEx::TextFormat("Acknowledge bits {}", (*debugInfo).acknowledgeBits);
+            }
+        }
+        ImGui::End();
+
+        if(ImGui::Begin("ClientInfo") && onlineStatus == OnlineStatus::Client)
+        {
+            auto debugInfo = client->GetConnectionDebugInfo();
+            
+            if(!debugInfo)
+            {
+                ImGui::Text("Client offline");
+            }
+            else
+            {
+                ImGuiEx::TextFormat("Local sequence {}", (*debugInfo).localSequence);
+                ImGuiEx::TextFormat("Remote sequence {}", (*debugInfo).remoteSequence);
+                ImGuiEx::TextFormat("Acknowledge bits {}", (*debugInfo).acknowledgeBits);
             }
         }
         ImGui::End();
@@ -314,24 +322,15 @@ int main(int argc, char* argv[])
                 if (ImGui::BeginTabItem("Misc"))
                 {
                     static int currentItem = 1;
-                    const char* items = "Linear\0Nearest\0PixelArt\0";
+                    const char* const items[] = {"Linear", "Nearest", "PixelArt"};
                     
-                    if(ImGui::Combo("RenderTexture ScaleMod", &currentItem, items))
+                    if(ImGui::Combo("RenderTexture ScaleMod", &currentItem, items, 3))
                     {
                         switch(currentItem)
                         {
-                            case 0:
-                                SDL_SetTextureScaleMode(renderTexture, SDL_SCALEMODE_LINEAR);
-                                std::println("Linear");
-                            break;
-                            case 1:
-                                SDL_SetTextureScaleMode(renderTexture, SDL_SCALEMODE_NEAREST);
-                                std::println("Nearest");
-                            break;
-                            case 2:
-                                SDL_SetTextureScaleMode(renderTexture, SDL_SCALEMODE_PIXELART);
-                                std::println("Pixel art");
-                            break;
+                            case 0: SDL_SetTextureScaleMode(renderTexture, SDL_SCALEMODE_LINEAR); break;
+                            case 1: SDL_SetTextureScaleMode(renderTexture, SDL_SCALEMODE_NEAREST); break;
+                            case 2: SDL_SetTextureScaleMode(renderTexture, SDL_SCALEMODE_PIXELART); break;
                         }
                     }
 
