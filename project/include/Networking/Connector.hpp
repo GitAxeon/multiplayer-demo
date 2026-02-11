@@ -89,7 +89,7 @@ private:
     {
         if(m_State != State::SentConnectionRequest)
         {
-            std::println("Unexpectedly received challenge from Server. Ignoring packet. HandshakeState: {}", static_cast<uint32_t>(m_State));
+            std::println("Unexpectedly received challenge from Server. Ignoring packet. HandshakeState: {}", static_cast<std::uint32_t>(m_State));
             return;
         }
 

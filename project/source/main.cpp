@@ -23,6 +23,67 @@
 
 #include "ImGui_Extension.hpp"
 
+#include "Networking/NetworkSystem/NetworkSystem.hpp"
+#include "Networking/NetworkSystem/Serialization/StreamWriter.hpp"
+#include "Networking/NetworkSystem/Serialization/StreamReader.hpp"
+
+#include "Handle.hpp"
+
+struct TestStruct
+{
+    TestStruct() = default;
+    TestStruct(std::int32_t x, std::int32_t y) : x(x), y(y) {}
+
+    bool operator==(const TestStruct& other) const
+    { return x == other.x && y == other.y; }
+    std::int32_t x{0};
+    std::int32_t y{0};
+};
+
+bool Serialize(Serialization::StreamWriter& writer, const TestStruct& source)
+{
+    return writer.Write(source.x) && writer.Write(source.y);
+}
+
+bool Deserialize(Serialization::StreamReader& reader, TestStruct& destination)
+{
+    return reader.Read(destination.x) && reader.Read(destination.y);
+}
+
+template<typename T>
+void ReadAndCompare(Serialization::StreamReader& reader, const char* name, T expectedValue)
+{
+    T readValue;
+    if(!reader.Read(readValue))
+    {
+        std::println("Failed to read {}", name);
+        return;
+    }
+
+    if(readValue != expectedValue)
+    {
+        std::println("Read value doesn't match expected value for {}", name);
+        return;
+    }
+
+    std::println("Read {} successfully!", name);
+}
+
+template<typename T>
+bool WriteValue(Serialization::StreamWriter& writer, const char* name, T value)
+{
+    if(writer.Write(value))
+    {
+        std::println("Successfully wrote {}", name);
+        return true;
+    }
+    else
+    {
+        std::println("Failed to write {}", name);
+        return false;
+    }
+}
+
 namespace Paths
 {
     // Path to the directory containing the executable
@@ -128,6 +189,40 @@ int main(int argc, char* argv[])
     
     std::println("Resource path: {}", Paths::Resources().string());
     // -Resource path
+
+    Networking::NetworkSystem netsystem;
+    auto handle = netsystem.Listen(81337);
+
+    if(handle)
+    {
+        std::println("Began listening at port 81337!");
+    }
+
+    // std::uint32_t testInt = 32;
+    // float testFloat = 1.05f;
+    // std::byte testByte {22};
+    // TestStruct testStruct(32, 32);
+    // bool testTrue = true;
+    // bool testFalse = false;
+
+    // std::vector<std::byte> testBuffer(16, std::byte{0});
+
+    // Serialization::StreamWriter writer(testBuffer);
+    // (void)WriteValue(writer, "testInt", testInt);
+    // (void)WriteValue(writer, "testFloat", testFloat);
+    // (void)WriteValue(writer, "testByte", testByte);
+    // (void)WriteValue(writer, "testStruct", testStruct);
+    // (void)WriteValue(writer, "testTrue", testTrue);
+    // (void)WriteValue(writer, "testFalse", testFalse);
+
+    // Serialization::StreamReader reader(testBuffer);
+    // (void)ReadAndCompare(reader, "testInt", testInt);
+    // (void)ReadAndCompare(reader, "testFloat", testFloat);
+    // (void)ReadAndCompare(reader, "testByte", testByte);
+    // (void)ReadAndCompare(reader, "testStruct", testStruct);
+    // (void)ReadAndCompare(reader, "testTrue", testTrue);
+    // (void)ReadAndCompare(reader, "testFalse", testFalse);
+
 
     SDL_Window* window = SDL_CreateWindow("Some application", 1024, 768, 0);
     SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);

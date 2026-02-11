@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <ranges>
 
 #include <SDL3/SDL_scancode.h>
 
@@ -14,7 +15,7 @@ class Keyboard
 public:
     Keyboard() 
     {
-        std::fill(m_Scancodes.begin(), m_Scancodes.end(), KeyState::Up);
+        std::ranges::fill(m_Scancodes, KeyState::Up);
     }
 
     void Process()

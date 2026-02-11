@@ -164,8 +164,8 @@ private:
 private:
     asio::io_context m_Context;
     std::thread m_NetworkThread;
-    
     Transport m_Transport;
+
     std::shared_ptr<Connection> m_Connection;
     Connector m_Connector;
 

@@ -72,7 +72,7 @@ bool Serialize(StreamWriter& serializer, const Header& header)
     serializer.Write(header.timestamp);
     serializer.Write(header.flags);
     serializer.Write(header.clientId);
-    serializer.Write(static_cast<std::uint8_t>(header.messageType));
+    serializer.Write(static_cast<std::underlying_type_t<MessageType>>(header.messageType));
 
     return serializer.Ok();
 }
@@ -87,7 +87,7 @@ bool Deserialize(StreamReader& deserializer, Header& header)
     deserializer.Read(header.flags);
     deserializer.Read(header.clientId);
 
-    std::uint8_t messageType = 0;
+    std::underlying_type_t<MessageType> messageType = 0;
     deserializer.Read(messageType);
     header.messageType = static_cast<MessageType>(messageType);
 
