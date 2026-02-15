@@ -28,6 +28,8 @@ public:
     friend constexpr auto operator<=>(const Handle&, const Handle&) = default;
 
 private:
+    // Could use std::optional so a value doesn't have to be "sacrificed" to present invalid
+    // that however could also be covered by a flag but std::optional would make it clearer? 
     T m_Value;
 };
 

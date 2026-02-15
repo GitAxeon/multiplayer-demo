@@ -198,6 +198,13 @@ int main(int argc, char* argv[])
         std::println("Began listening at port 81337!");
     }
 
+    auto connection = netsystem.Connect(asio::ip::udp::endpoint(asio::ip::make_address("127.0.0.1"), 81337));
+
+    if(!connection)
+    {
+        std::println("Failed to connect!");
+    }
+
     // std::uint32_t testInt = 32;
     // float testFloat = 1.05f;
     // std::byte testByte {22};

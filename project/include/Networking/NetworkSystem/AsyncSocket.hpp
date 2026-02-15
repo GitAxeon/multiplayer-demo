@@ -79,7 +79,7 @@ public:
 
     void SetReceiveCallback(ReceiveCallback callback) { m_ReceiveCallback = std::move(callback); }
 
-    void Stop()
+    void Close()
     {
         m_Receiving = false;
         m_Sending = false;
@@ -87,7 +87,7 @@ public:
         m_Socket.cancel();
     }
 
-    void Send(std::span<std::byte> buffer, const asio::ip::udp::endpoint& endpoint)
+    void Send(std::span<const std::byte> buffer, const asio::ip::udp::endpoint& endpoint)
     {
         std::shared_ptr<ByteVector> sharedBuffer = std::make_shared<ByteVector>(buffer.begin(), buffer.end());
         
@@ -114,7 +114,7 @@ public:
     }
 
     template<typename Callback>
-    void Send(std::span<std::byte> buffer, const asio::ip::udp::endpoint& endpoint, Callback&& callback)
+    void Send(std::span<const std::byte> buffer, const asio::ip::udp::endpoint& endpoint, Callback&& callback)
     {
         std::shared_ptr<ByteVector> sharedBuffer = std::make_shared<ByteVector>(buffer.begin(), buffer.end());
         

@@ -2,7 +2,9 @@
 
 #include <vector>
 
-#include "Message.hpp"
+#include "Connection.hpp"
+
+using ClientId = std::uint32_t;
 
 namespace Networking
 {
@@ -17,7 +19,7 @@ struct NetworkEvent
     };
 
     Type type;
-    ClientId connectionId;
+    ConnectionHandle connectionHandle;
     std::vector<std::byte> data;
 };
 

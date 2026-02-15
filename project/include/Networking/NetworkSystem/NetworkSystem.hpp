@@ -1,34 +1,16 @@
 #pragma once
 
-#include <unordered_map>
+#include <mutex>
+#include <vector>
 #include <thread>
+#include <unordered_map>
 
 #include "AsyncSocket.hpp"
-
 #include "Connection.hpp"
 #include "Listener.hpp"
+#include "NetworkEvent.hpp"
 
-struct NullToken_t {};
-constexpr NullToken_t NullOption; 
-
-template<typename T>
-class OptionalRef
-{
-public:
-    OptionalRef() = default;
-    OptionalRef(NullToken_t) {}
-    OptionalRef(T& value) : m_Pointer(&value) {}
-
-    operator bool() const { return m_Pointer; }
-
-    // Will explode if you don't check that m_Pointer has value
-    T* operator->() { return m_Pointer; }
-    T& value() { return *m_Pointer; }
-
-private:
-    T* m_Pointer{nullptr};
-};
-
+#include "OptionalRef.hpp"
 
 namespace Networking
 {
@@ -51,6 +33,9 @@ public:
             m_Context.run();
             std::println("Network thread stopping");
         });
+
+        m_WriteBuffer.reserve(256);
+        m_ReadBuffer.reserve(256);
     }
 
     ~NetworkSystem()
@@ -60,15 +45,25 @@ public:
 
     void Shutdown()
     {
+        for(auto& [_, listener] : m_Listeners)
+            listener.Close();
+        
+        for(auto& [_, connection] : m_Connections)
+            connection.Close();
+
         m_WorkGuard.reset();
         m_Context.stop();
 
-        m_NetworkThread.join();
+        if(m_NetworkThread.joinable())
+            m_NetworkThread.join();
     }
 
     void Update(std::chrono::milliseconds dt)
     {
+        std::lock_guard lock(m_EventBufferMutex);
 
+        std::swap(m_WriteBuffer, m_ReadBuffer);
+        m_WriteBuffer.clear();
     }
 
     // Server
@@ -76,36 +71,58 @@ public:
     {
         ListenerHandle nextHandle(m_NextListenerId);
 
-        if(auto it = m_Listeners.find(nextHandle); it != m_Listeners.end())
+        auto socket = std::make_unique<AsyncSocket>(m_Context);
+
+        if(!socket)
         {
             return ListenerHandle::Invalid;
-            // return InvalidListenerHandle;
         }
 
-        Listener2 listener(nextHandle, m_Context);
-
-        if(!listener.socket->Bind(asio::ip::udp::endpoint(asio::ip::udp::v4(), port)))
+        if(!socket->Bind(asio::ip::udp::endpoint(asio::ip::udp::v4(), port)))
         {
             return ListenerHandle::Invalid;
-            // return InvalidListenerHandle;
         }
 
-        listener.socket->SetReceiveCallback
+        socket->SetReceiveCallback
         (
-            [this, handle = nextHandle](const auto& datagram)
+            [this, handle = nextHandle](const IncomingDatagram& datagram)
             {
-                if(auto result = FindListener(handle))
-                {   
-                    result->HandleDatagram(datagram);
+                if(auto connection = FindConnection(datagram.endpoint))
+                {
+                    std::lock_guard lock(m_EventBufferMutex);
+
+                    // Push something to event queue
+                    NetworkEvent event
+                    {
+                        .type = NetworkEvent::Type::Message,
+                        .connectionHandle = m_EndpointToConnectionHandle.at(datagram.endpoint),
+                        .data = std::move(datagram.data)
+                    };
+                    
+                    m_WriteBuffer.emplace_back(event);
+
+                    return;
+                }
+
+                if(auto listener = FindListener(handle))
+                {
+                    auto newConnection = listener->HandleDatagram(datagram);
+
+                    if(newConnection)
+                    {
+                        
+                    }
                 }
                 else
                 {
-                    std::println("Listener requested by removed handle. (Socket receive)");
+                    std::println("A listener handle requested which does not exist. (Socket receive)");
                 }
             }
         );
 
-        listener.socket->ScheduleReceive();
+        socket->ScheduleReceive();
+
+        Listener2 listener(nextHandle, std::move(socket));
 
         m_Listeners.emplace(nextHandle, std::move(listener));
         
@@ -117,21 +134,22 @@ public:
     // Client
     ConnectionHandle Connect(const asio::ip::udp::endpoint& endpoint)
     {
-         
+        return ConnectionHandle::Invalid;
     }
 
     void Send(ConnectionHandle id, std::span<std::byte> data, Reliability reliability = Reliability::Unreliable)
     {
+        auto it = m_Connections.find(id);
+        if(it == m_Connections.end())
+        {
+            return;
+        }
 
+        it->second.Send(data);
     }
 
 private:
-    void HandleDatagram(const IncomingDatagram& datagram)
-    {
-
-    }
-
-    OptionalRef<Listener2> FindListener(ListenerHandle handle)
+    asd::OptionalRef<Listener2> FindListener(ListenerHandle handle)
     {
         auto find = m_Listeners.find(handle);
         
@@ -140,7 +158,19 @@ private:
             return m_Listeners.at(handle);
         }
 
-        return NullOption;
+        return asd::NullOption;
+    }
+
+    asd::OptionalRef<Connection2> FindConnection(asio::ip::udp::endpoint endpoint)
+    {
+        auto find = m_EndpointToConnectionHandle.find(endpoint);
+
+        if(find != m_EndpointToConnectionHandle.end())
+        {
+            return m_Connections.at(find->second);
+        }
+
+        return asd::NullOption;
     }
 
 private:
@@ -149,10 +179,16 @@ private:
     asio::executor_work_guard<asio::io_context::executor_type> m_WorkGuard;
 
     std::unordered_map<ListenerHandle, Listener2> m_Listeners;
-    std::unordered_map<ConnectionHandle, Connection2> m_Connections;
 
-    std::uint32_t m_NextListenerId {1};
-    ConnectionHandle m_NextConnectionId {1};
+    std::unordered_map<ConnectionHandle, Connection2> m_Connections;
+    std::unordered_map<asio::ip::udp::endpoint, ConnectionHandle> m_EndpointToConnectionHandle;
+
+    std::uint32_t m_NextListenerId {0};
+    std::uint32_t m_NextConnectionId {0};
+
+    std::mutex m_EventBufferMutex;
+    std::vector<NetworkEvent> m_WriteBuffer;
+    std::vector<NetworkEvent> m_ReadBuffer;
 };
 
 }

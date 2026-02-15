@@ -14,34 +14,42 @@ class ITransport
 {
 public:
     virtual ~ITransport() = default;
-    virtual void Send(std::span<std::byte> data, const asio::ip::udp::endpoint& endpoint) = 0;
+    virtual void Send(std::span<const std::byte> data, const asio::ip::udp::endpoint& endpoint) = 0;
+    virtual void Close() = 0;
 };
 
-class ClientTransport : public ITransport
+class ClientSideTransport final : public ITransport
 {
 public:
-    ClientTransport(asio::io_context& context)
+    explicit ClientSideTransport(asio::io_context& context)
         : m_Socket(context) {}
 
-    void Send(std::span<std::byte> data, const asio::ip::udp::endpoint& endpoint) override
+    void Send(std::span<const std::byte> data, const asio::ip::udp::endpoint& endpoint) override
     {
         m_Socket.Send(data, endpoint);
+    }
+
+    void Close()
+    {
+        m_Socket.Close();
     }
 
 private:
     AsyncSocket m_Socket;
 };
 
-class ServerTransport : public ITransport
+class ServerSideTransport final : public ITransport
 {
 public:
-    ServerTransport(AsyncSocket& socket) 
+    explicit ServerSideTransport(AsyncSocket& socket) 
         : m_Socket(socket) {}
     
-    void Send(std::span<std::byte> data, const asio::ip::udp::endpoint& endpoint) override
+    void Send(std::span<const std::byte> data, const asio::ip::udp::endpoint& endpoint) override
     {
         m_Socket.Send(data, endpoint);
     }
+
+    void Close() { }
 
 private:
     AsyncSocket& m_Socket;
