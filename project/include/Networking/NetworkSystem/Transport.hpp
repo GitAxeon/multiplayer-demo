@@ -21,21 +21,21 @@ public:
 class ClientSideTransport final : public ITransport
 {
 public:
-    explicit ClientSideTransport(asio::io_context& context)
-        : m_Socket(context) {}
+    explicit ClientSideTransport(std::unique_ptr<AsyncSocket> socket)
+        : m_Socket(std::move(socket)) {}
 
     void Send(std::span<const std::byte> data, const asio::ip::udp::endpoint& endpoint) override
     {
-        m_Socket.Send(data, endpoint);
+        m_Socket->Send(data, endpoint);
     }
 
     void Close()
     {
-        m_Socket.Close();
+        m_Socket->Close();
     }
 
 private:
-    AsyncSocket m_Socket;
+    std::unique_ptr<AsyncSocket> m_Socket;
 };
 
 class ServerSideTransport final : public ITransport

@@ -25,9 +25,12 @@ struct Listener2
         socket->Close();
     }
 
-    std::optional<Connection> HandleDatagram(const IncomingDatagram& datagram)
+    std::optional<Connection2> HandleDatagram(const IncomingDatagram& datagram)
     {
-        
+        Connection2 connection
+        {
+
+        };
     }
 
 public:

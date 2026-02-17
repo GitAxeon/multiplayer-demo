@@ -11,6 +11,8 @@
 #include "NetworkEvent.hpp"
 
 #include "OptionalRef.hpp"
+#include "NaiveDoubleBuffer.hpp"
+#include "InternalEvent.hpp"
 
 namespace Networking
 {
@@ -34,8 +36,7 @@ public:
             std::println("Network thread stopping");
         });
 
-        m_WriteBuffer.reserve(256);
-        m_ReadBuffer.reserve(256);
+        m_EventBuffer.Reserve(256);
     }
 
     ~NetworkSystem()
@@ -60,10 +61,7 @@ public:
 
     void Update(std::chrono::milliseconds dt)
     {
-        std::lock_guard lock(m_EventBufferMutex);
-
-        std::swap(m_WriteBuffer, m_ReadBuffer);
-        m_WriteBuffer.clear();
+        m_EventBuffer.Swap();
     }
 
     // Server
@@ -85,38 +83,9 @@ public:
 
         socket->SetReceiveCallback
         (
-            [this, handle = nextHandle](const IncomingDatagram& datagram)
+            [this, handle = nextHandle](IncomingDatagram const& datagram)
             {
-                if(auto connection = FindConnection(datagram.endpoint))
-                {
-                    std::lock_guard lock(m_EventBufferMutex);
-
-                    // Push something to event queue
-                    NetworkEvent event
-                    {
-                        .type = NetworkEvent::Type::Message,
-                        .connectionHandle = m_EndpointToConnectionHandle.at(datagram.endpoint),
-                        .data = std::move(datagram.data)
-                    };
-                    
-                    m_WriteBuffer.emplace_back(event);
-
-                    return;
-                }
-
-                if(auto listener = FindListener(handle))
-                {
-                    auto newConnection = listener->HandleDatagram(datagram);
-
-                    if(newConnection)
-                    {
-                        
-                    }
-                }
-                else
-                {
-                    std::println("A listener handle requested which does not exist. (Socket receive)");
-                }
+                HandleDatagramFromListener(datagram, handle);
             }
         );
 
@@ -132,8 +101,36 @@ public:
     }
 
     // Client
-    ConnectionHandle Connect(const asio::ip::udp::endpoint& endpoint)
+    ConnectionHandle Connect(asio::ip::udp::endpoint const& endpoint)
     {
+        ConnectionHandle nextHandle(m_NextConnectionId);
+
+        auto socket = std::make_unique<AsyncSocket>(m_Context);
+
+        if(!socket)
+        {
+            return ConnectionHandle::Invalid;
+        }
+
+        if(!socket->Bind(asio::ip::udp::endpoint(asio::ip::udp::v4(), 0)))
+        {
+            return ConnectionHandle::Invalid;
+        }
+
+        socket->SetReceiveCallback
+        (
+            [this, handle = nextHandle](IncomingDatagram const& datagram)
+            {
+                HandleDatagramFromConnection(datagram, handle);
+            }
+        );
+
+        auto transport = std::make_unique<ClientSideTransport>(std::move(socket));
+        Connection2 connection(nextHandle, std::move(transport), endpoint);
+        
+        m_Connections.emplace(nextHandle, std::move(connection));
+        m_NextConnectionId++;
+
         return ConnectionHandle::Invalid;
     }
 
@@ -173,6 +170,74 @@ private:
         return asd::NullOption;
     }
 
+    asd::OptionalRef<Connection2> FindConnection(ConnectionHandle handle)
+    {
+        auto find = m_Connections.find(handle);
+
+        if(find != m_Connections.end())
+        {
+            return find->second;
+        }
+
+        return asd::NullOption;
+    }
+
+    void HandleDatagramFromListener(IncomingDatagram const& datagram, ListenerHandle handle)
+    {
+        if(auto connection = FindConnection(datagram.endpoint))
+        {
+            // Push something to event queue
+            NetworkEvent event
+            {
+                .type = NetworkEvent::Type::Message,
+                .connectionHandle = m_EndpointToConnectionHandle.at(datagram.endpoint),
+                .data = std::move(datagram.data)
+            };
+            
+            m_EventBuffer.Push(std::move(event));
+
+            return;
+        }
+
+        if(auto listener = FindListener(handle))
+        {
+            auto newConnection = listener->HandleDatagram(datagram);
+
+            if(newConnection)
+            {
+                m_ConnectionMutex.lock();
+                
+                ConnectionHandle handle(m_NextConnectionId);
+                m_NextConnectionId++;
+                
+                m_Connections.emplace(ConnectionHandle(m_NextConnectionId), std::move(*newConnection));
+                m_ConnectionMutex.unlock();
+
+                NetworkEvent event
+                {
+                    .type = NetworkEvent::Type::Connected,
+                    .connectionHandle = handle
+                };
+
+                m_EventBuffer.Push(std::move(event));
+            }
+
+            return;
+        }
+        else
+        {
+            std::println("A listener handle requested which does not exist. (Socket receive)");
+        }
+    }
+
+    void HandleDatagramFromConnection(IncomingDatagram const& datagram, ConnectionHandle handle)
+    {
+        if(auto connection = FindConnection(handle))
+        {
+
+        }
+    }
+
 private:
     asio::io_context m_Context;
     std::thread m_NetworkThread;
@@ -180,15 +245,15 @@ private:
 
     std::unordered_map<ListenerHandle, Listener2> m_Listeners;
 
+    std::mutex m_ConnectionMutex;
     std::unordered_map<ConnectionHandle, Connection2> m_Connections;
     std::unordered_map<asio::ip::udp::endpoint, ConnectionHandle> m_EndpointToConnectionHandle;
 
     std::uint32_t m_NextListenerId {0};
     std::uint32_t m_NextConnectionId {0};
 
-    std::mutex m_EventBufferMutex;
-    std::vector<NetworkEvent> m_WriteBuffer;
-    std::vector<NetworkEvent> m_ReadBuffer;
+    NaiveDoubleBuffer<InternalEvent> m_InternalEvents;
+    NaiveDoubleBuffer<NetworkEvent> m_EventBuffer;
 };
 
 }

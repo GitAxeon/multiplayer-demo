@@ -72,6 +72,8 @@ public:
             return false;
         }
 
+        m_Open = true;
+
         return true;
     }
     
@@ -81,20 +83,21 @@ public:
 
     void Close()
     {
-        m_Receiving = false;
-        m_Sending = false;
+        if(!m_Open)
+            return;
 
-        m_Socket.cancel();
-    }
+        asio::post(m_Socket.get_executor(), [this]()
+        {
+            CloseInternal();
+        });
+    } 
 
     void Send(std::span<const std::byte> buffer, const asio::ip::udp::endpoint& endpoint)
-    {
-        std::shared_ptr<ByteVector> sharedBuffer = std::make_shared<ByteVector>(buffer.begin(), buffer.end());
-        
+    {        
         PendingSend pending
         {
             .endpoint = endpoint,
-            .data = sharedBuffer,
+            .data = {buffer.begin(), buffer.end()},
             .callback = [endpoint](auto ec, auto size)
             {
                 if(ec)
@@ -115,13 +118,11 @@ public:
 
     template<typename Callback>
     void Send(std::span<const std::byte> buffer, const asio::ip::udp::endpoint& endpoint, Callback&& callback)
-    {
-        std::shared_ptr<ByteVector> sharedBuffer = std::make_shared<ByteVector>(buffer.begin(), buffer.end());
-        
+    {        
         PendingSend pending
         {
             .endpoint = endpoint,
-            .data = sharedBuffer,
+            .data = {buffer.begin(), buffer.end()},
             .callback = std::forward<Callback>(callback)
         };
 
@@ -133,8 +134,24 @@ public:
                 ProcessNextSend();
         });     
     }
+    
+    bool StartReceiving()
+    {
+        if(!m_Open)
+            return false;
 
+        asio::post(m_Socket.get_executor(), [this]()
+        {
+            if(m_Receiving)
+                return;
+            
+            m_Receiving = true;
+            ScheduleReceive();
+        });
 
+        return true;
+    }
+private:
     void ScheduleReceive()
     {
         m_Socket.async_receive_from
@@ -143,6 +160,9 @@ public:
             m_RemoteEndpoint,
             [this](asio::error_code ec, std::size_t bytes)
             {
+                if(!m_Receiving)
+                    return;
+                
                 if(ec != asio::error::operation_aborted)
                     std::println("Error receiving data: {}", ec.message());
                 else
@@ -152,18 +172,34 @@ public:
                 {
 
                     .endpoint = m_RemoteEndpoint,
-                    .data = {m_ReceiveBuffer.begin(), m_ReceiveBuffer.end()},
+                    .data = {m_ReceiveBuffer.begin(), m_ReceiveBuffer.begin() + bytes},
                     .error = ec
                 };
 
-                m_ReceiveCallback(msg);
+                if(m_ReceiveCallback)
+                    m_ReceiveCallback(msg);
                 
                 ScheduleReceive();
             }
         );
     }
 
-private:
+    void CloseInternal()
+    {
+        if(!m_Open)
+            return;
+        
+        m_Open = false;
+
+        m_Receiving = false;
+        m_Sending = false;
+
+        // ToDo: Check error codes
+        asio::error_code ec;
+        m_Socket.cancel(ec);
+        m_Socket.close(ec);
+    }
+
     void ProcessNextSend()
     {
         if(m_SendQueue.empty())
@@ -177,17 +213,18 @@ private:
         auto pending = std::move(m_SendQueue.front());
         m_SendQueue.pop();
 
-        m_Socket.async_send_to(asio::const_buffer(pending.data->data(), pending.data->size()), pending.endpoint,
+        m_Socket.async_send_to(asio::buffer(pending.data), pending.endpoint,
         [this, p = std::move(pending)](auto ec, auto bytes)
         {
             p.callback(ec, bytes);
-            
+
             if(m_SendQueue.empty())
             {
                 m_Sending = false;
             }
             else
             {
+                // Note: Potential re-entrancy if using more than one thread and the ops are not serialized?
                 ProcessNextSend();
             }
         });
@@ -197,23 +234,24 @@ private:
     struct PendingSend
     {
         asio::ip::udp::endpoint endpoint;
-        std::shared_ptr<ByteVector> data;
+        ByteVector data;
         SendCallback callback;
     };
 
 private:
     asio::ip::udp::socket m_Socket;
+    bool m_Open{false};
 
     // Sending
     std::queue<PendingSend> m_SendQueue;
-    bool m_Sending = false;
+    bool m_Sending{false};
 
     // Receiving
     std::vector<std::byte> m_ReceiveBuffer;
     asio::ip::udp::endpoint m_RemoteEndpoint;
     ReceiveCallback m_ReceiveCallback;
 
-    bool m_Receiving = true;
+    bool m_Receiving{false};
 };
 
 }
