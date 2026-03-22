@@ -1,35 +1,37 @@
 #pragma once
 
-#include <memory>
-
 #include "AsyncSocket.hpp"
-#include "Transport.hpp"
-#include "Handle.hpp"
+#include "Types.hpp"
 
 namespace Networking
 {
 
-using ConnectionHandle = asd::Handle<struct ConnectionTag>;
+enum class ConnectionState
+{
+    Connecting,
+    Connected,
+    Closing,
+    Closed
+};
 
 struct Connection2
 {
-    Connection2(ConnectionHandle handle, std::unique_ptr<ITransport> transport, asio::ip::udp::endpoint remote)
-        : handle(handle), m_Transport(std::move(transport)) {}
-    
-    void Send(std::span<const std::byte> data)
-    {
-        m_Transport->Send(data, m_Remote);
-    }
-
-    void Close()
-    {
-        m_Transport->Close();
-    }
+    Connection2
+    (
+        ConnectionHandle handle, 
+        SocketHandle socket,
+        asio::ip::udp::endpoint remote,
+        ListenerHandle listener = ListenerHandle::Invalid
+    ) : m_Handle(handle), m_Socket(socket), m_Listener(listener), m_Remote(remote)
+    {}
 
 public:
-    ConnectionHandle handle;
-    std::unique_ptr<ITransport> m_Transport{nullptr};
+    ConnectionHandle m_Handle;
+    SocketHandle m_Socket;
+    ListenerHandle m_Listener; /* Contains a valid handle if connection is inbound */
     asio::ip::udp::endpoint m_Remote;
+
+    ConnectionState m_State{ConnectionState::Closed};
 };
 
 }

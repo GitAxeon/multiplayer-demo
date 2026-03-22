@@ -14,11 +14,12 @@ public:
     OptionalRef(NullToken_t) {}
     OptionalRef(T& value) : m_Pointer(&value) {}
 
-    operator bool() const { return m_Pointer; }
+    constexpr operator bool() const { return m_Pointer; }
 
     // Will explode if you don't check that m_Pointer has value
     T* operator->() { return m_Pointer; }
-    T& value() { return *m_Pointer; }
+    T& Value() { return *m_Pointer; }
+    T const& Value() const { return *m_Pointer; }
 
 private:
     T* m_Pointer{nullptr};

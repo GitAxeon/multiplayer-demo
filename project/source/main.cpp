@@ -28,61 +28,7 @@
 #include "Networking/NetworkSystem/Serialization/StreamReader.hpp"
 
 #include "Handle.hpp"
-
-struct TestStruct
-{
-    TestStruct() = default;
-    TestStruct(std::int32_t x, std::int32_t y) : x(x), y(y) {}
-
-    bool operator==(const TestStruct& other) const
-    { return x == other.x && y == other.y; }
-    std::int32_t x{0};
-    std::int32_t y{0};
-};
-
-bool Serialize(Serialization::StreamWriter& writer, const TestStruct& source)
-{
-    return writer.Write(source.x) && writer.Write(source.y);
-}
-
-bool Deserialize(Serialization::StreamReader& reader, TestStruct& destination)
-{
-    return reader.Read(destination.x) && reader.Read(destination.y);
-}
-
-template<typename T>
-void ReadAndCompare(Serialization::StreamReader& reader, const char* name, T expectedValue)
-{
-    T readValue;
-    if(!reader.Read(readValue))
-    {
-        std::println("Failed to read {}", name);
-        return;
-    }
-
-    if(readValue != expectedValue)
-    {
-        std::println("Read value doesn't match expected value for {}", name);
-        return;
-    }
-
-    std::println("Read {} successfully!", name);
-}
-
-template<typename T>
-bool WriteValue(Serialization::StreamWriter& writer, const char* name, T value)
-{
-    if(writer.Write(value))
-    {
-        std::println("Successfully wrote {}", name);
-        return true;
-    }
-    else
-    {
-        std::println("Failed to write {}", name);
-        return false;
-    }
-}
+#include "VariantUtilities.hpp"
 
 namespace Paths
 {
@@ -191,45 +137,8 @@ int main(int argc, char* argv[])
     // -Resource path
 
     Networking::NetworkSystem netsystem;
-    auto handle = netsystem.Listen(81337);
-
-    if(handle)
-    {
-        std::println("Began listening at port 81337!");
-    }
-
-    auto connection = netsystem.Connect(asio::ip::udp::endpoint(asio::ip::make_address("127.0.0.1"), 81337));
-
-    if(!connection)
-    {
-        std::println("Failed to connect!");
-    }
-
-    // std::uint32_t testInt = 32;
-    // float testFloat = 1.05f;
-    // std::byte testByte {22};
-    // TestStruct testStruct(32, 32);
-    // bool testTrue = true;
-    // bool testFalse = false;
-
-    // std::vector<std::byte> testBuffer(16, std::byte{0});
-
-    // Serialization::StreamWriter writer(testBuffer);
-    // (void)WriteValue(writer, "testInt", testInt);
-    // (void)WriteValue(writer, "testFloat", testFloat);
-    // (void)WriteValue(writer, "testByte", testByte);
-    // (void)WriteValue(writer, "testStruct", testStruct);
-    // (void)WriteValue(writer, "testTrue", testTrue);
-    // (void)WriteValue(writer, "testFalse", testFalse);
-
-    // Serialization::StreamReader reader(testBuffer);
-    // (void)ReadAndCompare(reader, "testInt", testInt);
-    // (void)ReadAndCompare(reader, "testFloat", testFloat);
-    // (void)ReadAndCompare(reader, "testByte", testByte);
-    // (void)ReadAndCompare(reader, "testStruct", testStruct);
-    // (void)ReadAndCompare(reader, "testTrue", testTrue);
-    // (void)ReadAndCompare(reader, "testFalse", testFalse);
-
+    auto listener = netsystem.Listen(81337);
+    auto connection = netsystem.Connect("127.0.0.1", 81337);
 
     SDL_Window* window = SDL_CreateWindow("Some application", 1024, 768, 0);
     SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
@@ -269,13 +178,6 @@ int main(int argc, char* argv[])
     {
         std::println("SDL_SetTextureScaleMode failed for renderTexture: {}", SDL_GetError());
     }
-
-    std::unique_ptr<Networking::Server> server;
-    std::unique_ptr<Networking::Client> client;
-
-    enum class OnlineStatus { Offline, Client, Host };
-
-    OnlineStatus onlineStatus = OnlineStatus::Offline;
 
     bool showImGuiDemo = false;
     int upscaleFactor = 4;
@@ -321,6 +223,44 @@ int main(int argc, char* argv[])
                     keyboard.UpdateKeyState(event.key.scancode, !event.key.down);
                 } break;
             }
+        }
+
+        netsystem.Update();
+
+        for(auto& networkEvent : netsystem.Events())
+        {
+            using namespace asd::Variant;
+            DispatchLenient
+            (
+                networkEvent,
+                [](Networking::Event::ListenerStarted const& e)
+                {
+                    std::println("Netsystem: Listener with handle: {} is ready", e.handle.Index());
+                },
+                [](Networking::Event::ListenerClosed const& e)
+                {
+                    std::println("Netsystem: Listener with handle {} closed with reason: {}", e.handle.Index(), static_cast<int>(e.listenerError));
+                },
+                [](Networking::Event::IncomingConnectionAccepted const& e)
+                {
+                    std::println("Netsystem: New connection accepted! Listener: {} Connection handle: {}", e.listener.Index(), e.connection.Index());
+                },
+                [](Networking::Event::OutgoingConnectionEstablished const& e)
+                {
+                    std::println("Netsystem: Outgoing connection established! Handle: {}", e.handle.Index());
+                },
+                [](Networking::Event::DataReceived const& e)
+                {
+                    std::print("Netsystem: Data received from handle {}: ", e.handle.Index());
+                    for(auto byte : e.data)
+                        std::print("{} ", static_cast<int>(byte));
+                    std::println("");
+                },
+                [](Networking::Event::ConnectionClosed const& e)
+                {
+                    std::println("Netsystem: Connection with handle {} closed with reason: {}", e.handle.Index(), static_cast<int>(e.connectionError));
+                }
+            );
         }
 
 // Input
@@ -383,40 +323,6 @@ int main(int argc, char* argv[])
         if(showImGuiDemo)
             ImGui::ShowDemoWindow();
 
-        if(ImGui::Begin("ServerInfo") && onlineStatus == OnlineStatus::Host)
-        {
-            auto debugInfo = client->GetConnectionDebugInfo();
-            
-            if(!debugInfo)
-            {
-                ImGui::Text("Client offline");
-            }
-            else
-            {
-                ImGuiEx::TextFormat("Local sequence {}", (*debugInfo).localSequence);
-                ImGuiEx::TextFormat("Remote sequence {}", (*debugInfo).remoteSequence);
-                ImGuiEx::TextFormat("Acknowledge bits {}", (*debugInfo).acknowledgeBits);
-            }
-        }
-        ImGui::End();
-
-        if(ImGui::Begin("ClientInfo") && onlineStatus == OnlineStatus::Client)
-        {
-            auto debugInfo = client->GetConnectionDebugInfo();
-            
-            if(!debugInfo)
-            {
-                ImGui::Text("Client offline");
-            }
-            else
-            {
-                ImGuiEx::TextFormat("Local sequence {}", (*debugInfo).localSequence);
-                ImGuiEx::TextFormat("Remote sequence {}", (*debugInfo).remoteSequence);
-                ImGuiEx::TextFormat("Acknowledge bits {}", (*debugInfo).acknowledgeBits);
-            }
-        }
-        ImGui::End();
-
         if(ImGui::Begin("Controls"))
         {
             if (ImGui::BeginTabBar("MyTabBar"))
@@ -442,84 +348,23 @@ int main(int argc, char* argv[])
 
                     ImGui::EndTabItem();
                 }
-                if (ImGui::BeginTabItem("Networking"))
+                if(ImGui::BeginTabItem("Network System"))
                 {
-                    switch(onlineStatus)
+                    if(ImGui::Button("Send Hello to clients"))
                     {
-                        case OnlineStatus::Offline:
-                        {
-                            ImGui::Text("Host");
+                        Networking::ByteVector buff(sizeof(Networking::Packet::Header) + 32);
+                        
+                        Networking::Packet::Header header{};
+                        header.protocol = Networking::sProtocol2;
 
-                            static int hostPort = 13998; 
-                            ImGui::InputInt("Port", &hostPort);
-                            if(ImGui::Button("Start server"))
-                            {
-                                if(!server)
-                                    server = std::make_unique<Networking::Server>();
+                        Serialization::StreamWriter writer(buff);
+                        writer.Write(header);
+                        writer.Write(std::string("Hello"));
+                        
+                        if(!writer.Ok())
+                            std::println("Problem writing to buffer");
 
-                                server->Start(hostPort);
-                                onlineStatus = OnlineStatus::Host;
-                            }
-
-                            ImGui::Text("Join");
-                            
-                            static char buffer[32] {"127.0.0.1\0"};
-                            ImGui::InputText("IP", buffer, sizeof(buffer));
-                            static int clientPort = 13998;
-                            ImGui::InputInt("Port#1", &clientPort);
-
-                            if(ImGui::Button("Join server"))
-                            {
-                                if(!client)
-                                    client = std::make_unique<Networking::Client>();
-                                    
-                                try
-                                {
-                                    client->Connect(asio::ip::udp::endpoint(asio::ip::make_address(buffer), clientPort));
-                                    onlineStatus = OnlineStatus::Client;
-                                }
-                                catch(std::exception& e)
-                                {
-                                    std::println("Error: {}", e.what());
-                                }
-                            }
-
-                        } break;
-                        case OnlineStatus::Client:
-                        {
-                            ImGui::Text("Client");
-                            ImGui::Separator();
-
-                            if(ImGui::Button("Disconnect"))
-                            {
-                                client->Disconnect();
-                                onlineStatus = OnlineStatus::Offline;
-                            }
-
-                            if(ImGui::Button("Send data"))
-                            {
-                                client->Send("Hello?");
-                            }
-                        } break;
-                        case OnlineStatus::Host:
-                        {
-                            ImGui::Text("Server");
-                            ImGui::Separator();
-                            
-                            static std::array<char, 32> buffer {"Hello from server\0"};
-                            ImGui::InputText("Broadcast message", buffer.data(), buffer.size());
-                            
-                            if(ImGui::Button("Send"))
-                            {
-                                server->Broadcast(buffer.data());
-                            }
-
-                            if(ImGui::Button("Stop server"))
-                            {
-                                server->Stop();
-                                onlineStatus = OnlineStatus::Offline;
-                            }
-                        } break;
+                        netsystem.Send(connection, std::span{buff.data(), writer.StreamPosition()});
                     }
 
                     ImGui::EndTabItem();

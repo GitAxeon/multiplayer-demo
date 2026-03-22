@@ -2,6 +2,7 @@
 
 #include <mutex>
 #include <vector>
+#include <span>
 
 namespace Networking
 {
@@ -10,39 +11,56 @@ template<typename T>
 class NaiveDoubleBuffer
 {
 public:
-
     void Reserve(std::size_t size)
     {
-        m_WriteBuffer.reserve(size);
-        m_ReadBuffer.reserve(size);
+        m_BackBuffer.reserve(size);
+        m_FrontBuffer.reserve(size);
     }
+
+    template<typename...Args>
+    void Emplace(Args&&... args)
+    {
+        std::lock_guard lock(m_Mutex);
+        m_BackBuffer.emplace_back(std::forward<Args>(args)...);
+    }
+
+    void Push(T const& value)
+    {
+        std::lock_guard lock(m_Mutex);
+        m_BackBuffer.push_back(value);
+    }
+
     void Push(T&& value)
     {
         std::lock_guard lock(m_Mutex);
-        m_WriteBuffer.push_back(std::move(value));
+        m_BackBuffer.push_back(std::move(value));
     }
 
     void Swap()
     {
         std::lock_guard lock(m_Mutex); 
-
-        m_ReadBuffer.clear();
-        m_WriteBuffer.swap(m_ReadBuffer);
+        m_FrontBuffer.clear();
+        m_FrontBuffer.swap(m_BackBuffer);
     }
 
-    std::vector<T>& ReadBuffer()
+    std::span<const T> Read() const
     {
-        return m_ReadBuffer;
+        return m_FrontBuffer;
     }
 
     void Clear()
     {
-        m_ReadBuffer.clear();
+        m_FrontBuffer.clear();
+    }
+
+    bool Empty() const
+    {
+        return m_FrontBuffer.empty();
     }
 
 private:
-    std::vector<T> m_WriteBuffer;
-    std::vector<T> m_ReadBuffer;
+    std::vector<T> m_BackBuffer;
+    std::vector<T> m_FrontBuffer;
     std::mutex m_Mutex;
 };
 

@@ -3,6 +3,7 @@
 #include <concepts>
 #include <span>
 #include <ranges>
+#include <string_view>
 
 #include "StreamBase.hpp"
 #include "NetworkTrivial.hpp"
@@ -16,6 +17,9 @@ class StreamWriter : public StreamBase
 public:
     explicit StreamWriter(std::span<std::byte> buffer)
         : m_Buffer(buffer) {}
+
+    template<typename T>
+    bool Write(T*) = delete;
 
     // For integers, float/double and std::byte
     template<NetworkTrivial T>
@@ -41,17 +45,9 @@ public:
         return m_Ok;
     }
 
-    // bool is stored as one byte
-    bool Write(bool value)
-    {
-        std::uint8_t v = value ? 1 : 0;
-
-        return Write(v);
-    }
-
     // For non trivial types (basically anything other than a scalar)
     template<NetworkSerializable T>
-    bool Write(const T& value)
+    bool Write(T const& value)
     {
         if(!m_Ok)
             return false;
@@ -82,6 +78,25 @@ public:
         return true;
     }
 
+    // bool is stored as one byte
+    bool Write(bool value)
+    {
+        std::uint8_t v = value ? 1 : 0;
+
+        return Write(v);
+    }
+
+    bool Write(std::string_view value)
+    {
+        if(!m_Ok)
+            return false;
+
+        Write(static_cast<std::uint64_t>(value.size()));
+        WriteBytes(std::as_bytes(std::span{value}));
+
+        return true;
+    }
+    
 private:
     std::span<std::byte> m_Buffer;
 };

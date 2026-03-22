@@ -17,6 +17,9 @@ public:
     StreamReader(std::span<const std::byte> buffer)
         : m_Buffer(buffer) {}
     
+    template<typename T>
+    bool Read(T*) = delete;
+
     // For integers, float/double and std::byte
     template<NetworkTrivial T>
     bool Read(T& value)
@@ -39,19 +42,6 @@ public:
         }
 
         return true;
-    }
-
-    // bool is stored as one byte
-    bool Read(bool& value)
-    {
-        std::uint8_t v = 0;
-        if(Read(v))
-        {
-            value = (v != 0);
-            return true;
-        }
-
-        return false;
     }
 
     // For non trivial types (basically anything other than a scalar)
@@ -88,6 +78,52 @@ public:
         );
 
         m_Position += destination.size();
+
+        return true;
+    }
+
+    // bool is stored as one byte
+    bool Read(bool& value)
+    {
+        std::uint8_t v = 0;
+        if(Read(v))
+        {
+            value = (v != 0);
+            return true;
+        }
+
+        return false;
+    }
+
+    bool Read(std::string& value)
+    {
+        if(!m_Ok)
+            return false;
+        
+        if(m_Position + sizeof(std::uint64_t) > m_Buffer.size())
+        {
+            m_Ok = false;
+            return false;
+        }
+
+        std::uint64_t length{0};
+        Read(length);
+
+        if(length == 0)
+        {
+            return true;
+        }
+
+        if(m_Position + length > m_Buffer.size())
+        {
+            m_Ok = false;
+            return false;
+        }
+
+        if(value.size() < length)
+            value.resize(length);
+
+        ReadBytes(std::as_writable_bytes(std::span{value.data(), length}));
 
         return true;
     }

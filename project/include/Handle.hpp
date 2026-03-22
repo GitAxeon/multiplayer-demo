@@ -11,43 +11,50 @@ template<typename Tag, std::unsigned_integral T = std::uint32_t>
 class Handle
 {
 public:
+    using ValueType = T;
+    
     constexpr static T InvalidValue { std::numeric_limits<T>::max() };
     constexpr static T Min          { std::numeric_limits<T>::min() };
     constexpr static T Max          { std::numeric_limits<T>::max() - 1 };
 
-    static const Handle Invalid; // Equals to Handle<Tag, T>{InvalidValue}
+    static const Handle Invalid; // Equals to Handle<Tag, T>{InvalidValue, InvalidValue}
     
-    constexpr Handle() : m_Value(InvalidValue) {}
-    explicit constexpr Handle(T value) : m_Value(value) {}
+    constexpr Handle() : m_Index(InvalidValue), m_Generation(InvalidValue) {}
+    
+    explicit constexpr Handle(T value, T generation) 
+        : m_Index(value), m_Generation(generation) {}
 
-    constexpr bool Valid() const { return m_Value != InvalidValue; }
+    constexpr bool Valid() const { return m_Index != InvalidValue && m_Generation != InvalidValue; }
+    constexpr T Index() const { return m_Index; }
+    constexpr T Generation() const { return m_Generation; }
 
-    explicit constexpr operator T() const { return m_Value; }
     explicit constexpr operator bool() const { return Valid(); }
 
     friend constexpr auto operator<=>(const Handle&, const Handle&) = default;
 
 private:
-    // Could use std::optional so a value doesn't have to be "sacrificed" to present invalid
-    // that however could also be covered by a flag but std::optional would make it clearer? 
-    T m_Value;
+    T m_Index;
+    T m_Generation;
 };
 
 // Invalid requires out of class initialization because msvc considers the type incomplete ?
 template<typename Tag, std::unsigned_integral T>
-constexpr Handle<Tag, T> Handle<Tag, T>::Invalid{Handle<Tag, T>{InvalidValue}};
+constexpr Handle<Tag, T> Handle<Tag, T>::Invalid{InvalidValue, InvalidValue};
 
 }
 
 namespace std
 {
 
-template<typename Tag, std::unsigned_integral T>
-struct hash<asd::Handle<Tag, T>>
+template<typename Tag>
+struct hash<asd::Handle<Tag, std::uint32_t>>
 {
-    size_t operator()(const asd::Handle<Tag, T>& handle) const
+    size_t operator()(const asd::Handle<Tag, std::uint32_t>& handle) const
     {
-        return std::hash<T>{}(static_cast<T>(handle));
+        return std::hash<std::uint64_t>{}
+        (
+            (static_cast<std::uint64_t>(handle.Index()) << 32) | handle.Generation()
+        );
     }
 };
 

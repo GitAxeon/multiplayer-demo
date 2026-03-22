@@ -12,6 +12,9 @@
 
 #include "../AsioFormat.hpp"
 #include "Buffer.hpp"
+#include "Error.hpp"
+#include "Types.hpp"
+#include "SocketContext.hpp"
 
 namespace Networking
 {
@@ -20,37 +23,50 @@ struct IncomingDatagram
 {
     asio::ip::udp::endpoint endpoint;
     ByteVector data;
-    asio::error_code error;
+    TransportError error;
 };
 
 class AsyncSocket
 {
 public:
     // Return value is used to communicate if the socket should keep receiving more data 
-    using ReceiveCallback = std::function<void(const IncomingDatagram&)>;
+    using ReceiveCallback = std::function<void(IncomingDatagram const&)>;
 
     using SendCallback = std::function<void(asio::error_code, std::size_t)>;
 
-    explicit AsyncSocket(asio::io_context& ctx)
-        : m_Socket(ctx) { }
+    struct PendingSend
+    {
+        asio::ip::udp::endpoint endpoint;
+        ByteVector data;
+        SendCallback callback;
+    };
 
-    AsyncSocket(const AsyncSocket&) = delete;
-    AsyncSocket& operator=(const AsyncSocket&) = delete;
+    explicit AsyncSocket(SocketHandle handle, asio::io_context& ioContext, SocketContext socketContext)
+        : m_Handle(handle), m_Socket(ioContext), m_Context(socketContext), m_ReceiveBuffer(512, std::byte{0})
+    { }
 
-    AsyncSocket(AsyncSocket&&) = delete;
-    AsyncSocket& operator=(AsyncSocket&&) = delete;
+    AsyncSocket(AsyncSocket const&) = delete;
+    AsyncSocket& operator=(AsyncSocket const&) = delete;
 
-    bool Bind(const asio::ip::udp::endpoint& endpoint)
+    AsyncSocket(AsyncSocket&&) = default;
+    AsyncSocket& operator=(AsyncSocket&&) = default;
+
+    TransportError Bind(asio::ip::udp::endpoint const& endpoint)
     {
         if(m_Socket.is_open())
         {
+            asio::error_code shutdownError;
+            m_Socket.shutdown(m_Socket.shutdown_both, shutdownError);
+            if(shutdownError)
+            {
+                return TranslateError(shutdownError);
+            }
+
             asio::error_code closeError;
             m_Socket.close(closeError);
-
             if(closeError)
             {
-                std::println("Failed to close socket cleanly: {}", closeError.message());
-                return false; // Could we continue despite the dirty close?
+                return TranslateError(closeError); // Could we continue despite the dirty close?
             }
         }
 
@@ -60,7 +76,7 @@ public:
         if(openError)
         {
             std::println("Failed to open socket: {}", openError.message());
-            return false;
+            return TranslateError(openError);
         }
 
         asio::error_code bindError;
@@ -69,12 +85,12 @@ public:
         if(bindError)
         {
             std::println("Failed to bind socket: {}", bindError.message());
-            return false;
+            return TranslateError(bindError);
         }
 
         m_Open = true;
 
-        return true;
+        return TransportError::None;
     }
     
     asio::ip::udp::endpoint LocalEndpoint() const { return m_Socket.local_endpoint(); }
@@ -86,14 +102,21 @@ public:
         if(!m_Open)
             return;
 
-        asio::post(m_Socket.get_executor(), [this]()
-        {
-            CloseInternal();
-        });
-    } 
+        m_Open = false;
 
-    void Send(std::span<const std::byte> buffer, const asio::ip::udp::endpoint& endpoint)
-    {        
+        m_ReceiveEnabled = false;
+        m_IsSending = false;
+        
+        asio::error_code ec;
+        m_Socket.shutdown(asio::socket_base::shutdown_both, ec);
+        m_Socket.close(ec);
+    }
+
+    void Send(std::span<const std::byte> buffer, asio::ip::udp::endpoint const& endpoint)
+    {
+        if(!m_Open)
+            return;
+
         PendingSend pending
         {
             .endpoint = endpoint,
@@ -107,18 +130,18 @@ public:
             }
         };
 
-        asio::post(m_Socket.get_executor(), [this, p=std::move(pending)]() mutable
-        {
-            m_SendQueue.emplace(std::move(p));
-            
-            if(!m_Sending)
-                ProcessNextSend();
-        });
+        m_SendQueue.emplace(std::move(pending));
+        
+        if(!m_IsSending)
+            ProcessNextSend();
     }
 
     template<typename Callback>
     void Send(std::span<const std::byte> buffer, const asio::ip::udp::endpoint& endpoint, Callback&& callback)
     {        
+        if(!m_Open)
+            return;
+
         PendingSend pending
         {
             .endpoint = endpoint,
@@ -126,13 +149,10 @@ public:
             .callback = std::forward<Callback>(callback)
         };
 
-        asio::post(m_Socket.get_executor(), [this, p=std::move(pending)]() mutable
-        {
-            m_SendQueue.emplace(std::move(p));
-            
-            if(!m_Sending)
-                ProcessNextSend();
-        });     
+        m_SendQueue.emplace(std::move(pending));
+        
+        if(!m_IsSending)
+            ProcessNextSend();
     }
     
     bool StartReceiving()
@@ -140,118 +160,120 @@ public:
         if(!m_Open)
             return false;
 
-        asio::post(m_Socket.get_executor(), [this]()
-        {
-            if(m_Receiving)
-                return;
-            
-            m_Receiving = true;
-            ScheduleReceive();
-        });
+        if(m_ReceiveEnabled)
+            return false;
+        
+        m_ReceiveEnabled = true;
+        ScheduleReceive();
 
         return true;
     }
+
+    void OnReceive(asio::error_code ec, std::size_t bytes)
+    {
+        if(ec == asio::error::operation_aborted)
+        {
+            std::println("Socket async operation aborted, returning");
+            return;
+        }
+        
+        IncomingDatagram msg
+        {
+            .endpoint = m_RemoteEndpoint,
+            .data = {m_ReceiveBuffer.begin(), m_ReceiveBuffer.begin() + bytes},
+            .error = TranslateError(ec)
+        };
+
+        if(m_ReceiveCallback)
+            m_ReceiveCallback(msg);
+        
+        if(CanReceive())
+            ScheduleReceive();       
+    }
+
+    void OnSendComplete(PendingSend&& pending, asio::error_code ec, std::size_t bytes)
+    {
+        pending.callback(ec, bytes);
+
+        if(ec == asio::error::operation_aborted)
+            return;
+
+        if(m_SendQueue.empty())
+        {
+            m_IsSending = false;
+        }
+        else
+        {
+            // Note: Potential re-entrancy if using more than one thread and the ops are not serialized?
+            ProcessNextSend();
+        }        
+    }
+
 private:
     void ScheduleReceive()
     {
+        if(!CanReceive())
+            return;
+        
         m_Socket.async_receive_from
         (
             asio::buffer(m_ReceiveBuffer),
             m_RemoteEndpoint,
-            [this](asio::error_code ec, std::size_t bytes)
+            [context = m_Context, handle = m_Handle](asio::error_code ec, std::size_t bytes) mutable
             {
-                if(!m_Receiving)
-                    return;
-                
-                if(ec != asio::error::operation_aborted)
-                    std::println("Error receiving data: {}", ec.message());
-                else
-                    return;
-               
-                IncomingDatagram msg
-                {
-
-                    .endpoint = m_RemoteEndpoint,
-                    .data = {m_ReceiveBuffer.begin(), m_ReceiveBuffer.begin() + bytes},
-                    .error = ec
-                };
-
-                if(m_ReceiveCallback)
-                    m_ReceiveCallback(msg);
-                
-                ScheduleReceive();
+                if(auto self = context.Get(handle))
+                    self->OnReceive(ec, bytes);
             }
         );
-    }
-
-    void CloseInternal()
-    {
-        if(!m_Open)
-            return;
-        
-        m_Open = false;
-
-        m_Receiving = false;
-        m_Sending = false;
-
-        // ToDo: Check error codes
-        asio::error_code ec;
-        m_Socket.cancel(ec);
-        m_Socket.close(ec);
     }
 
     void ProcessNextSend()
     {
         if(m_SendQueue.empty())
         {
-            m_Sending = false;
+            m_IsSending = false;
             return;
         }
 
-        m_Sending = true;
+        m_IsSending = true;
 
         auto pending = std::move(m_SendQueue.front());
         m_SendQueue.pop();
 
-        m_Socket.async_send_to(asio::buffer(pending.data), pending.endpoint,
-        [this, p = std::move(pending)](auto ec, auto bytes)
-        {
-            p.callback(ec, bytes);
+        auto buffer = asio::buffer(pending.data);
+        auto endpoint = pending.endpoint;
 
-            if(m_SendQueue.empty())
-            {
-                m_Sending = false;
-            }
-            else
-            {
-                // Note: Potential re-entrancy if using more than one thread and the ops are not serialized?
-                ProcessNextSend();
-            }
+        m_Socket.async_send_to(buffer, endpoint,
+        [handle = m_Handle, context = m_Context, p = std::move(pending)](auto ec, auto bytes) mutable
+        {
+            if(auto self = context.Get(handle))
+                self->OnSendComplete(std::move(p), ec, bytes);
         });
+    }
+    
+    bool CanReceive() const
+    {
+        return m_Open && m_ReceiveEnabled;
     }
 
 private:
-    struct PendingSend
-    {
-        asio::ip::udp::endpoint endpoint;
-        ByteVector data;
-        SendCallback callback;
-    };
-
-private:
+    SocketHandle m_Handle;
     asio::ip::udp::socket m_Socket;
+    SocketContext m_Context;
+
     bool m_Open{false};
 
     // Sending
     std::queue<PendingSend> m_SendQueue;
-    bool m_Sending{false};
+    bool m_IsSending{false};
 
     // Receiving
+    // Note: If receive buffer isnt resized no data can be received since it's capacity? is 0
     std::vector<std::byte> m_ReceiveBuffer;
     asio::ip::udp::endpoint m_RemoteEndpoint;
     ReceiveCallback m_ReceiveCallback;
 
-    bool m_Receiving{false};
+    bool m_ReceiveEnabled{false};
 };
 
 }

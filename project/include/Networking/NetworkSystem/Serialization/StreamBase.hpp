@@ -8,8 +8,8 @@ namespace Serialization
 class StreamBase
 {
 public:
-    std::size_t GetStreamPosition() const { return m_Position; }
-    bool SetStreamPosition(std::size_t position)
+    std::size_t StreamPosition() const { return m_Position; }
+    bool StreamPosition(std::size_t position)
     { 
         m_Position = position;
         return true;

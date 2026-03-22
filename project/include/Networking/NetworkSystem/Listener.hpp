@@ -2,40 +2,64 @@
 
 #include <memory>
 #include <optional>
+#include <chrono>
+#include <unordered_map>
 
 #include "AsyncSocket.hpp"
 #include "Handle.hpp"
 #include "Connection.hpp"
+#include "Types.hpp"
 
 namespace Networking
 {
 
-using ListenerHandle = asd::Handle<struct ListenerTag>;
+enum class ListenerState
+{
+    Open,
+    Closing,
+    Closed
+};
+
+struct NewConnectionInfo
+{
+    std::uint32_t sequence{0};
+    std::uint32_t remoteSequence{0};
+};
+
+struct PendingConnection
+{
+    asio::ip::udp::endpoint endpoint;
+    std::uint32_t challenge{0};
+    std::uint32_t sequence{0};
+    std::uint32_t remoteSequence{0};
+    std::chrono::steady_clock::time_point lastReceive;
+};
 
 struct Listener2
 {
-    Listener2(ListenerHandle handle, asio::io_context& context)
-        : handle(handle), socket(std::make_unique<AsyncSocket>(context)) {}
+    Listener2(ListenerHandle handle)
+        : m_Handle(handle) {}
     
-    Listener2(ListenerHandle handle, std::unique_ptr<AsyncSocket> socket)
-        : handle(handle), socket(std::move(socket)) {}
+    Listener2(ListenerHandle handle, SocketHandle socket)
+        : m_Handle(handle), m_Socket(socket) {}
 
-    void Close()
+    std::optional<NewConnectionInfo> OnReceiveData(IncomingDatagram const& datagram)
     {
-        socket->Close();
-    }
-
-    std::optional<Connection2> HandleDatagram(const IncomingDatagram& datagram)
-    {
-        Connection2 connection
+        NewConnectionInfo info
         {
-
+            .sequence = 0,
+            .remoteSequence = 0
         };
+
+        return info;
     }
 
 public:
-    ListenerHandle handle;
-    std::unique_ptr<AsyncSocket> socket{nullptr};
+    ListenerHandle m_Handle;
+    SocketHandle m_Socket;
+
+    ListenerState m_State{ListenerState::Closed};
+
 };
 
 }
